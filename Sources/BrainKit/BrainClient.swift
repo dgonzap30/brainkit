@@ -3,6 +3,14 @@ import Foundation
 /// The capability the view model depends on — lets tests inject a mock without a network.
 public protocol FrontDoorClient: Sendable {
     func frontDoor(text: String, mode: FrontDoorMode) async throws -> FrontDoorResponse
+    func frontDoor(text: String, mode: FrontDoorMode, history: [HistoryTurn]) async throws -> FrontDoorResponse
+}
+
+public extension FrontDoorClient {
+    /// Back-compat default: conformers that only implement the 2-arg form ignore history.
+    func frontDoor(text: String, mode: FrontDoorMode, history: [HistoryTurn]) async throws -> FrontDoorResponse {
+        try await frontDoor(text: text, mode: mode)
+    }
 }
 
 /// Talks to the Lodestar brain over a configurable base URL with an optional bearer token.
@@ -28,12 +36,17 @@ public struct BrainClient: FrontDoorClient {
     }
 
     public func frontDoor(text: String, mode: FrontDoorMode) async throws -> FrontDoorResponse {
+        try await frontDoor(text: text, mode: mode, history: [])
+    }
+
+    public func frontDoor(text: String, mode: FrontDoorMode, history: [HistoryTurn]) async throws -> FrontDoorResponse {
         var req = URLRequest(url: baseURL.appendingPathComponent("front-door"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 30
         authorize(&req)
-        req.httpBody = try JSONEncoder().encode(FrontDoorRequest(text: text, mode: mode))
+        req.httpBody = try JSONEncoder().encode(
+            FrontDoorRequest(text: text, mode: mode, history: history.isEmpty ? nil : history))
 
         let data: Data
         let resp: URLResponse

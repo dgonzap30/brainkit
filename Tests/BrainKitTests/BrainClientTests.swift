@@ -101,6 +101,19 @@ final class BrainClientTests: XCTestCase {
     }
 }
 
+extension BrainClientTests {
+    func testFrontDoorWithHistoryPostsAndDecodes() async throws {
+        respond(status: 200, json: #"{"kind":"ask","action":"answered","answer":"ok"}"#)
+        let r = try await makeClient(token: "t").frontDoor(
+            text: "and tomorrow?", mode: .ask,
+            history: [HistoryTurn(role: "user", text: "readiness today?")])
+        XCTAssertEqual(r.kind, "ask")
+        XCTAssertEqual(r.answer, "ok")
+        XCTAssertEqual(MockURLProtocol.lastRequest?.url?.path, "/front-door")
+        XCTAssertEqual(MockURLProtocol.lastRequest?.httpMethod, "POST")
+    }
+}
+
 /// Async throwing-assertion helper (XCTAssertThrowsError has no async overload).
 func XCTAssertThrowsErrorAsync<T>(
     _ expression: @autoclosure () async throws -> T,
