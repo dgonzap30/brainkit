@@ -1,17 +1,26 @@
 import Foundation
 
+/// One prior conversation turn sent to the brain so a follow-up is answered in context.
+public struct HistoryTurn: Codable, Sendable, Equatable {
+    public let role: String   // "user" | "assistant"
+    public let text: String
+    public init(role: String, text: String) { self.role = role; self.text = text }
+}
+
 /// front-door classification mode. `.auto` lets the brain classify capture-vs-ask.
 public enum FrontDoorMode: String, Codable, Sendable {
     case auto, ask, capture
 }
 
-/// `POST /front-door` request body.
+/// `POST /front-door` request body. `history` is optional and omitted when nil.
 public struct FrontDoorRequest: Encodable, Sendable, Equatable {
     public let text: String
     public let mode: FrontDoorMode
-    public init(text: String, mode: FrontDoorMode) {
+    public let history: [HistoryTurn]?
+    public init(text: String, mode: FrontDoorMode, history: [HistoryTurn]? = nil) {
         self.text = text
         self.mode = mode
+        self.history = history
     }
 }
 

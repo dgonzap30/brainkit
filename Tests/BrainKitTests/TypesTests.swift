@@ -33,4 +33,21 @@ final class TypesTests: XCTestCase {
         XCTAssertEqual(r.kind, "ask")
         XCTAssertEqual(r.answer, "caution — HRV down")
     }
+
+    func testRequestEncodesHistoryWhenPresent() throws {
+        let req = FrontDoorRequest(text: "and tomorrow?", mode: .ask,
+                                   history: [HistoryTurn(role: "user", text: "readiness today?"),
+                                             HistoryTurn(role: "assistant", text: "caution")])
+        let obj = try JSONSerialization.jsonObject(with: JSONEncoder().encode(req)) as? [String: Any]
+        let hist = obj?["history"] as? [[String: Any]]
+        XCTAssertEqual(hist?.count, 2)
+        XCTAssertEqual(hist?.first?["role"] as? String, "user")
+        XCTAssertEqual(hist?.first?["text"] as? String, "readiness today?")
+    }
+
+    func testRequestOmitsHistoryKeyWhenNil() throws {
+        let obj = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(FrontDoorRequest(text: "hi", mode: .auto))) as? [String: Any]
+        XCTAssertNil(obj?["history"])  // Action-Button no-regression: no history key on the wire
+    }
 }
