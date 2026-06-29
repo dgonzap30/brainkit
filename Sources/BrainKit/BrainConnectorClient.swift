@@ -21,11 +21,12 @@ public struct BrainConnectorClient: Sendable {
         self.session = session
     }
 
-    /// `GET /core/personal-apps/{appId}/outbox` → the app's pending approved writes. Returns only
-    /// well-formed records (malformed elements dropped, undecodable body → `[]`); throws `BrainError`
-    /// on transport/auth/server failure. The client is appId-generic; the brain currently serves only
-    /// `lockin` (generalizing that route is E3 connector-tier scope).
-    public func pendingWrites(appId: String) async throws -> [ConnectorRecord] {
+    /// `GET /core/personal-apps/{appId}/outbox` → the app's pending approved `connector.v1` writes.
+    /// Returns only well-formed records (malformed elements dropped, undecodable body → `[]`); throws
+    /// `BrainError` on transport/auth/server failure. appId-generic — the brain serves every app with a
+    /// registered executor adapter (E3-3) and 404s an unknown app (surfaced here as `.server(status:404)`).
+    /// The caller dedups by `executionId` and persists applied ids so re-polling never re-applies.
+    public func pollOutbox(appId: String) async throws -> [ConnectorRecord] {
         var req = URLRequest(url: baseURL.appendingPathComponent("core/personal-apps/\(appId)/outbox"))
         req.httpMethod = "GET"
         req.timeoutInterval = 10

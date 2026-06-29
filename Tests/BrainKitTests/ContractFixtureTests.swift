@@ -46,6 +46,29 @@ final class ContractFixtureTests: XCTestCase {
         XCTAssertEqual(payload.snapshot.todayTotals["USD"], 47.2)
     }
 
+    func testConnectorV1FixtureDecodesThroughBrainKit() throws {
+        let rec = try JSONDecoder().decode(ConnectorRecord.self, from: fixture("connector.v1.json"))
+        XCTAssertEqual(rec.schemaVersion, "connector.v1")
+        XCTAssertEqual(rec.executionId, "exec:7f1c0a9e-2b3d-4c5e-8a9b-0c1d2e3f4a5b")
+        XCTAssertEqual(rec.itemId, "cand:9a8b7c6d")
+        XCTAssertEqual(rec.writePlanId, "wp:1e2d3c4b")
+        XCTAssertEqual(rec.appId, "lockin")
+        XCTAssertEqual(rec.environment, "personal-local")
+        XCTAssertEqual(rec.target, "tasks")
+        XCTAssertEqual(rec.operation, "upsert")
+        XCTAssertEqual(rec.mode, "work")
+        XCTAssertEqual(rec.actor, "diego")
+        XCTAssertEqual(rec.executedAt, "2026-06-29T15:31:00.000Z")
+        XCTAssertEqual(rec.payload["text"], .string("Task: send the Rocio finance request today"))
+        XCTAssertEqual(rec.approval.status, "approved")
+        XCTAssertEqual(rec.approval.actor, "diego")
+        XCTAssertEqual(rec.approval.decidedAt, "2026-06-29T15:30:00.000Z")
+        XCTAssertNil(rec.approval.reason)                                  // null reason -> nil
+        XCTAssertEqual(rec.rollback.type, "append-only")
+        XCTAssertEqual(rec.rollback.outboxPath, "/core/personal-app-outbox/lockin/tasks.jsonl")
+        XCTAssertEqual(rec.rollback.removeExecutionId, rec.executionId)
+    }
+
     /// Re-encoding a decoded fixture and decoding again must be lossless — proves the BrainKit DTOs are
     /// a faithful representation of the on-wire shape (no field silently dropped on the round trip).
     func testFixturesRoundTripLosslessly() throws {
@@ -55,5 +78,8 @@ final class ContractFixtureTests: XCTestCase {
         let pay = try JSONDecoder().decode(LedgerIngestPayload.self, from: fixture("ledger.v1.json"))
         let pay2 = try JSONDecoder().decode(LedgerIngestPayload.self, from: JSONEncoder().encode(pay))
         XCTAssertEqual(pay, pay2)
+        let rec = try JSONDecoder().decode(ConnectorRecord.self, from: fixture("connector.v1.json"))
+        let rec2 = try JSONDecoder().decode(ConnectorRecord.self, from: JSONEncoder().encode(rec))
+        XCTAssertEqual(rec, rec2)
     }
 }
