@@ -1,0 +1,27 @@
+{
+  "schemaVersion" : "connector.v1",
+  "executionId" : "exec:7f1c0a9e-2b3d-4c5e-8a9b-0c1d2e3f4a5b",
+  "itemId" : "cand:9a8b7c6d",
+  "writePlanId" : "wp:1e2d3c4b",
+  "appId" : "lockin",
+  "environment" : "personal-local",
+  "target" : "tasks",
+  "operation" : "upsert",
+  "mode" : "work",
+  "actor" : "diego",
+  "executedAt" : "2026-06-29T15:31:00.000Z",
+  "payload" : {
+    "text" : "Task: send the Rocio finance request today"
+  },
+  "approval" : {
+    "status" : "approved",
+    "actor" : "diego",
+    "decidedAt" : "2026-06-29T15:30:00.000Z",
+    "reason" : null
+  },
+  "rollback" : {
+    "type" : "append-only",
+    "outboxPath" : "/core/personal-app-outbox/lockin/tasks.jsonl",
+    "removeExecutionId" : "exec:7f1c0a9e-2b3d-4c5e-8a9b-0c1d2e3f4a5b"
+  }
+}

@@ -30,8 +30,7 @@ The contract governs both halves of the nervous system:
   (`POST /core/personal-apps/{health,ledger}/ingest`). Covered by `health.v1` / `ledger.v1` here.
 - **connector-OUT** (brain → app): the limb pulls brain-authored writes from its outbox
   (`GET /core/personal-apps/{appId}/outbox`, see `BrainConnectorClient`). The outbox record envelope
-  is `connector.v1` — its golden fixture + validator are a follow-up ticket (E3); listed here so the
-  namespace is reserved and the direction is documented, not as shipped surface yet.
+  is `connector.v1` (shipped — golden fixture + `validateConnectorRecord` below).
 
 ## Drift gate
 
@@ -68,6 +67,17 @@ If either side drifts (a field renamed/retyped without a version bump), its gate
 - **transaction** — `id` (UUID string), `dedupeKey`, `timestamp` (ISO-8601 string), `currency`,
   `merchant`, `cardName`, `source` (strings); `amount` (number); `pending`, `declined` (booleans;
   `declined` defaults to false when absent).
+
+### connector.v1 — `ConnectorRecord` (brain → app, the connector-OUT envelope)
+One JSON line per brain-authored write, appended to `<root>/personal-app-outbox/<appId>/<target>.jsonl`
+by `personal-app-executor.ts` and pulled by apps via `GET /core/personal-apps/:appId/outbox`.
+`schemaVersion` "connector.v1" · `executionId` ("exec:<uuid>") · `itemId` · `writePlanId` · `appId` ·
+`environment` · `target` · `operation` · `mode` · `actor` · `executedAt` (ISO-8601) · `payload`
+(opaque `Record<string,unknown>`, app-specific) · `approval` (`{status, actor, decidedAt, reason|null}`
+— the inbox decision that authorised the write) · `rollback` (`{type:"append-only", outboxPath,
+removeExecutionId}` — undo by dropping the matching line). The brain *produces* these, so
+`validateConnectorRecord` is a drift gate + the per-app outbox reader's corrupt-line sanitizer, not an
+untrusted-input boundary. Apps dedup by `executionId`.
 
 ### Wire-type notes
 - **Dates are strings.** A plain `JSONEncoder` encodes `Date` as a number; the brain validators require
