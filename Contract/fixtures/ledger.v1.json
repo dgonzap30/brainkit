@@ -1,0 +1,59 @@
+{
+  "deviceId" : "iphone-15-pro",
+  "exportedAt" : "2026-06-29T15:31:00.000Z",
+  "reason" : "transaction",
+  "schemaVersion" : "ledger.v1",
+  "snapshot" : {
+    "latestTransaction" : {
+      "amount" : 5.4,
+      "cardName" : "Amex Centurion",
+      "currency" : "USD",
+      "declined" : false,
+      "dedupeKey" : "amex-mx-2026-06-29-blue-bottle-540",
+      "id" : "A1B2C3D4-E5F6-7788-99AA-BBCCDDEEFF00",
+      "merchant" : "Blue Bottle",
+      "pending" : false,
+      "source" : "applePay",
+      "timestamp" : "2026-06-29T15:30:00.000Z"
+    },
+    "monthTotals" : {
+      "MXN" : 9420,
+      "USD" : 1203.75
+    },
+    "pendingCount" : 1,
+    "sourceCounts" : {
+      "applePay" : 12,
+      "sms" : 6
+    },
+    "todayTotals" : {
+      "MXN" : 182.3,
+      "USD" : 47.2
+    }
+  },
+  "transactions" : [
+    {
+      "amount" : 5.4,
+      "cardName" : "Amex Centurion",
+      "currency" : "USD",
+      "declined" : false,
+      "dedupeKey" : "amex-mx-2026-06-29-blue-bottle-540",
+      "id" : "A1B2C3D4-E5F6-7788-99AA-BBCCDDEEFF00",
+      "merchant" : "Blue Bottle",
+      "pending" : false,
+      "source" : "applePay",
+      "timestamp" : "2026-06-29T15:30:00.000Z"
+    },
+    {
+      "amount" : 182.3,
+      "cardName" : "Amex Centurion",
+      "currency" : "MXN",
+      "declined" : false,
+      "dedupeKey" : "amex-mx-2026-06-29-uber-18230",
+      "id" : "B2C3D4E5-F6A7-8899-AABB-CCDDEEFF0011",
+      "merchant" : "Uber",
+      "pending" : true,
+      "source" : "sms",
+      "timestamp" : "2026-06-29T14:10:00.000Z"
+    }
+  ]
+}

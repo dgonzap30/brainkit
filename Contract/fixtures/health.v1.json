@@ -1,0 +1,42 @@
+{
+  "days" : [
+    {
+      "activeEnergyKcal" : 540,
+      "bodyMassKg" : 74.1,
+      "day" : "2026-06-28",
+      "exerciseMin" : 38,
+      "hrvMs" : 42.5,
+      "mindfulMin" : 10,
+      "respiratoryRate" : 14.2,
+      "restingHeartRate" : 51,
+      "sleep" : {
+        "awakeMin" : 17,
+        "coreMin" : 260,
+        "deepMin" : 74,
+        "durationMin" : 451,
+        "inBedMin" : 470,
+        "remMin" : 97
+      },
+      "spo2" : 97,
+      "steps" : 9420,
+      "vo2Max" : 48,
+      "walkRunDistanceKm" : 6.8
+    }
+  ],
+  "deviceId" : "iphone-15-pro",
+  "exportedAt" : "2026-06-29T15:31:00.000Z",
+  "reason" : "observer",
+  "schemaVersion" : "health.v1",
+  "workouts" : [
+    {
+      "avgHeartRate" : 152,
+      "distanceKm" : 5.1,
+      "durationMin" : 32,
+      "end" : "2026-06-28T07:32:00.000Z",
+      "energyKcal" : 410,
+      "start" : "2026-06-28T07:00:00.000Z",
+      "type" : "running",
+      "uuid" : "F1E2D3C4-B5A6-7788-99AA-BBCCDDEEFF00"
+    }
+  ]
+}
