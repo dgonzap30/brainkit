@@ -4,9 +4,14 @@ import PackageDescription
 let package = Package(
     name: "BrainKit",
     platforms: [.iOS(.v17), .macOS(.v14)],
-    products: [.library(name: "BrainKit", targets: ["BrainKit"])],
+    products: [
+        .library(name: "BrainKit", targets: ["BrainKit"]),
+        .library(name: "LodestarPluginKit", targets: ["LodestarPluginKit"]),
+    ],
     targets: [
         .target(name: "BrainKit"),
         .testTarget(name: "BrainKitTests", dependencies: ["BrainKit"]),
+        .target(name: "LodestarPluginKit", dependencies: ["BrainKit"]),
+        .testTarget(name: "LodestarPluginKitTests", dependencies: ["LodestarPluginKit"]),
     ]
 )
