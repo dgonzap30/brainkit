@@ -18,7 +18,7 @@ public extension FrontDoorClient {
 public struct BrainClient: FrontDoorClient {
     public let baseURL: URL
     public let token: String?
-    private let session: URLSession
+    internal let session: URLSession
 
     public init(baseURL: URL, token: String?, session: URLSession = .shared) {
         self.baseURL = baseURL
