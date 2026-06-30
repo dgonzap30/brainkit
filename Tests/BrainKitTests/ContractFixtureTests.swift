@@ -46,6 +46,20 @@ final class ContractFixtureTests: XCTestCase {
         XCTAssertEqual(payload.snapshot.todayTotals["USD"], 47.2)
     }
 
+    func testTemperV1FixtureDecodesThroughBrainKit() throws {
+        let req = try JSONDecoder().decode(TemperIngestRequest.self, from: fixture("temper.v1.json"))
+        XCTAssertEqual(req.schemaVersion, "temper.v1")
+        XCTAssertEqual(req.deviceId, "iphone-17-pro")
+        XCTAssertEqual(req.reason, .observer)
+        XCTAssertEqual(req.workouts.count, 1)
+        XCTAssertEqual(req.workouts.first?.workoutId, "hk-1")
+        XCTAssertEqual(req.workouts.first?.whoopStrain, 14.3)
+        XCTAssertEqual(req.foodDays.count, 1)
+        XCTAssertEqual(req.foodDays.first?.totalCalories, 2100)
+        XCTAssertEqual(req.whoopDays.count, 1)
+        XCTAssertEqual(req.whoopDays.first?.recoveryScore, 66)
+    }
+
     func testConnectorV1FixtureDecodesThroughBrainKit() throws {
         let rec = try JSONDecoder().decode(ConnectorRecord.self, from: fixture("connector.v1.json"))
         XCTAssertEqual(rec.schemaVersion, "connector.v1")
@@ -81,5 +95,8 @@ final class ContractFixtureTests: XCTestCase {
         let rec = try JSONDecoder().decode(ConnectorRecord.self, from: fixture("connector.v1.json"))
         let rec2 = try JSONDecoder().decode(ConnectorRecord.self, from: JSONEncoder().encode(rec))
         XCTAssertEqual(rec, rec2)
+        let temper = try JSONDecoder().decode(TemperIngestRequest.self, from: fixture("temper.v1.json"))
+        let temper2 = try JSONDecoder().decode(TemperIngestRequest.self, from: JSONEncoder().encode(temper))
+        XCTAssertEqual(temper, temper2)
     }
 }

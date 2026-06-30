@@ -1,0 +1,41 @@
+{
+  "schemaVersion" : "temper.v1",
+  "deviceId" : "iphone-17-pro",
+  "exportedAt" : "2026-06-29T18:00:00.000Z",
+  "reason" : "observer",
+  "workouts" : [
+    {
+      "id" : "WK-1",
+      "workoutId" : "hk-1",
+      "sessionDate" : "2026-06-29T00:00:00.000Z",
+      "startedAt" : "2026-06-29T15:00:00.000Z",
+      "endedAt" : "2026-06-29T15:42:00.000Z",
+      "lockInDurationMinutes" : 42,
+      "whoopStrain" : 14.3,
+      "whoopAvgHR" : 148,
+      "whoopKilojoules" : 2100,
+      "whoopDurationMinutes" : 41
+    }
+  ],
+  "foodDays" : [
+    {
+      "date" : "2026-06-29",
+      "totalCalories" : 2100,
+      "totalProtein" : 180,
+      "totalCarbs" : 190,
+      "totalFat" : 70,
+      "entryCount" : 5
+    }
+  ],
+  "whoopDays" : [
+    {
+      "date" : "2026-06-29",
+      "recoveryScore" : 66,
+      "hrv" : 48,
+      "rhr" : 51,
+      "strain" : 14.3,
+      "sleepHours" : 7.2,
+      "sleepPerformance" : 88
+    }
+  ]
+}
