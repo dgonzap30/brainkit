@@ -55,4 +55,26 @@ final class IngestTemperTests: XCTestCase {
             XCTAssertEqual($0 as? BrainError, .unauthorized)
         }
     }
+
+    func testRateLimitedThrows() async {
+        respond(status: 429, json: #"{"error":"rate_limited"}"#)
+        await XCTAssertThrowsErrorAsync(try await makeClient(token: nil).ingestTemper(batch(), ingestToken: "t")) {
+            XCTAssertEqual($0 as? BrainError, .rateLimited)
+        }
+    }
+
+    func testMalformed200ThrowsDecoding() async {
+        respond(status: 200, json: #"not-json"#)
+        await XCTAssertThrowsErrorAsync(try await makeClient(token: nil).ingestTemper(batch(), ingestToken: "t")) {
+            XCTAssertEqual($0 as? BrainError, .decoding)
+        }
+    }
+
+    func testTransportFailureThrowsUnreachable() async {
+        // Don't set a handler — MockURLProtocol will call didFailWithError, causing URLSession to throw
+        MockURLProtocol.handler = nil
+        await XCTAssertThrowsErrorAsync(try await makeClient(token: nil).ingestTemper(batch(), ingestToken: "t")) {
+            XCTAssertEqual($0 as? BrainError, .unreachable)
+        }
+    }
 }
