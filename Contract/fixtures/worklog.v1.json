@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "worklog.v1",
+  "deviceId": "helm-macbook-pro",
+  "exportedAt": "2026-07-02T18:00:00.000Z",
+  "reason": "event",
+  "sessions": [
+    {
+      "id": "6a6f1e2e-6b1a-4c9e-8b8a-6a6f1e2e6b1a",
+      "project": "neo-pazz",
+      "event": "started",
+      "at": "2026-07-02T17:55:00.000Z",
+      "kind": "interactive",
+      "label": "ship"
+    }
+  ],
+  "rollup": {
+    "day": "2026-07-02",
+    "weighted": 12.3,
+    "calls": 420,
+    "by_project": [
+      { "project": "neo-pazz", "weighted": 5.1, "calls": 120 }
+    ]
+  }
+}
