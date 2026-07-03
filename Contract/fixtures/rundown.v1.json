@@ -1,0 +1,26 @@
+{
+  "schemaVersion" : "rundown.v1",
+  "deviceId" : "mac-mini",
+  "exportedAt" : "2026-07-03T18:00:00.000Z",
+  "reason" : "manual",
+  "takes" : [
+    {
+      "id" : "TK-1",
+      "scriptId" : "SC-1",
+      "fileName" : "take-01.wav",
+      "recordedAt" : "2026-07-03T17:40:00.000Z",
+      "durationSec" : 38.4,
+      "picked" : true,
+      "truncated" : false
+    }
+  ],
+  "scripts" : [
+    {
+      "id" : "SC-1",
+      "title" : "UFC 311 preview",
+      "status" : "recorded",
+      "durationSec" : 42,
+      "pillar" : "sports-analytics"
+    }
+  ]
+}
