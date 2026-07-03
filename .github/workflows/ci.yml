@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+
+jobs:
+  swift:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Test BrainKit
+        run: swift test --filter BrainKitTests
+      - name: Test LodestarPluginKit
+        run: swift test --filter LodestarPluginKitTests
