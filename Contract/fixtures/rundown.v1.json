@@ -12,6 +12,13 @@
       "durationSec" : 38.4,
       "picked" : true,
       "truncated" : false
+    },
+    {
+      "id" : "TK-2",
+      "fileName" : "freeform-01.wav",
+      "recordedAt" : "2026-07-03T17:45:00.123Z",
+      "durationSec" : 12.0,
+      "picked" : false
     }
   ],
   "scripts" : [

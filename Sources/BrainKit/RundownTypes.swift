@@ -2,13 +2,13 @@ import Foundation
 
 public struct RundownTake: Codable, Sendable, Equatable {
     public var id: String
-    public var scriptId: String
+    public var scriptId: String?          // nil = freeform take, no script
     public var fileName: String
     public var recordedAt: String         // ISO-8601
     public var durationSec: Double
     public var picked: Bool
     public var truncated: Bool?
-    public init(id: String, scriptId: String, fileName: String, recordedAt: String,
+    public init(id: String, scriptId: String? = nil, fileName: String, recordedAt: String,
                 durationSec: Double, picked: Bool, truncated: Bool? = nil) {
         self.id = id; self.scriptId = scriptId; self.fileName = fileName
         self.recordedAt = recordedAt; self.durationSec = durationSec

@@ -43,6 +43,24 @@ final class RundownTypesTests: XCTestCase {
                           .discarded(reason: "x"))
     }
 
+    /// Rundown's Take.scriptId is `String?` on the app side — nil means a freeform take with no
+    /// backing script. The wire contract must round-trip that as an absent/null key, not "".
+    func testFreeformTakeDecodesWithNilScriptId() throws {
+        let json = #"""
+        {"schemaVersion":"rundown.v1","deviceId":"d","exportedAt":"2026-07-03T18:00:00.000Z","reason":"manual",
+         "takes":[{"id":"TK-2","fileName":"freeform-01.wav","recordedAt":"2026-07-03T17:45:00.123Z","durationSec":12.0,"picked":false}],
+         "scripts":[]}
+        """#
+        let req = try JSONDecoder().decode(RundownIngestRequest.self, from: json.data(using: .utf8)!)
+        XCTAssertNil(req.takes.first?.scriptId)
+    }
+
+    func testInitDefaultsScriptIdToNilForFreeformTakes() {
+        let take = RundownTake(id: "TK-2", fileName: "freeform-01.wav",
+                               recordedAt: "2026-07-03T17:45:00.123Z", durationSec: 12.0, picked: false)
+        XCTAssertNil(take.scriptId)
+    }
+
     /// Mirrors ContractFixtureTests' file-locating approach: decode the golden fixture by
     /// #filePath-relative path (a dev-time gate, never shipped in a bundle).
     func testRundownV1FixtureDecodesThroughBrainKit() throws {
@@ -54,8 +72,10 @@ final class RundownTypesTests: XCTestCase {
         let req = try JSONDecoder().decode(RundownIngestRequest.self, from: data)
         XCTAssertEqual(req.schemaVersion, "rundown.v1")
         XCTAssertEqual(req.deviceId, "mac-mini")
-        XCTAssertEqual(req.takes.count, 1)
+        XCTAssertEqual(req.takes.count, 2)
         XCTAssertEqual(req.takes.first?.fileName, "take-01.wav")
+        XCTAssertEqual(req.takes.first?.scriptId, "SC-1")
+        XCTAssertNil(req.takes[1].scriptId)               // TK-2 is the freeform-take variant
         XCTAssertEqual(req.scripts.count, 1)
         XCTAssertEqual(req.scripts.first?.pillar, "sports-analytics")
     }
