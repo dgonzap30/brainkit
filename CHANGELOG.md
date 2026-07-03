@@ -2,6 +2,12 @@
 
 All notable changes to BrainKit are documented here. Versioning follows [SemVer](https://semver.org); contract schema versions (`capture.v1`, `temper.v1`, …) evolve additively and are documented per release.
 
+## [0.2.1] — 2026-07-03
+
+### Fixed
+
+- **`rundown.v1`** — `RundownTake.scriptId` is now `String?` (was non-optional), matching the app-side `Take.scriptId` on `TakesStore.swift` where `nil` denotes a freeform take with no backing script. Fixture + tests updated with a freeform-take case.
+
 ## [0.2.0] — 2026-07-03
 
 ### Added
