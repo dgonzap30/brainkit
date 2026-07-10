@@ -2,6 +2,12 @@
 
 All notable changes to BrainKit are documented here. Versioning follows [SemVer](https://semver.org); contract schema versions (`capture.v1`, `temper.v1`, …) evolve additively and are documented per release.
 
+## [0.3.0] — 2026-07-09
+
+### Added
+
+- **E9 zero-config provisioning:** `ProvisioningRecord` + `PluginConfig.adoptBundleProvisioning` (deploy-time bundle stamping → first-launch Keychain adoption), `GET /pairing/config` client + `PluginConfig.refreshFromBrain` (config authority inversion), AI proxy request builders (`aiMessagesRequest`, `capabilitiesReportRequest`) + shared `BrainAIState` typed offline states with banner, `CapabilityCatalog` + `CapabilityChecklistView` setup checklist. Additive; no breaking changes.
+
 ## [0.2.1] — 2026-07-03
 
 ### Fixed
