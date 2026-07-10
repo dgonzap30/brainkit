@@ -115,4 +115,32 @@ public struct PluginConfig: Sendable {
               let snapshotToken, !snapshotToken.isEmpty else { return nil }
         return BrainClient(baseURL: url, token: snapshotToken)
     }
+
+    /// E9 §2 — authed request to the brain AI proxy. nil ⇔ not provisioned (no usable
+    /// host+token anywhere): callers surface BrainAIState.notProvisioned, never a raw error.
+    public func aiMessagesRequest(body: Data, app: String, task: String, timeout: TimeInterval = 60) -> URLRequest? {
+        authedPOST(path: "v1/ai/messages", body: body, timeout: timeout).map { req in
+            var r = req
+            r.setValue(app, forHTTPHeaderField: "x-lodestar-app")
+            r.setValue(task, forHTTPHeaderField: "x-lodestar-task")
+            return r
+        }
+    }
+
+    /// E9 §3 — capability checklist report (fire-and-forget on each sync).
+    public func capabilitiesReportRequest(body: Data, timeout: TimeInterval = 15) -> URLRequest? {
+        authedPOST(path: "pairing/capabilities", body: body, timeout: timeout)
+    }
+
+    private func authedPOST(path: String, body: Data, timeout: TimeInterval) -> URLRequest? {
+        let snapshotToken = token
+        guard let base = baseURL, let snapshotToken, !snapshotToken.isEmpty else { return nil }
+        var req = URLRequest(url: base.appendingPathComponent(path))
+        req.httpMethod = "POST"
+        req.timeoutInterval = timeout
+        req.setValue("Bearer \(snapshotToken)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        return req
+    }
 }
