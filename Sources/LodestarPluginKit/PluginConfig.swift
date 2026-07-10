@@ -10,11 +10,17 @@ public struct PluginConfig: Sendable {
     public static let defaultIngestTokenKey = "ingest_token"
     public static let defaultHostKey = "mini_host"
     public static let defaultPort = 4317
+    public static let defaultFallbackHostKey = "brain_host_fallback"
+    public static let defaultBFFHostKey = "newsroom_bff_host"
+    public static let defaultAdoptedAtKey = "provisioning_adopted_at"
 
     public let tokenKey: String
     public let ingestTokenKey: String
     public let hostKey: String
     public let port: Int
+    public let fallbackHostKey: String
+    public let bffHostKey: String
+    public let adoptedAtKey: String
 
     private let keychain: KeychainStore
     private nonisolated(unsafe) let defaults: UserDefaults   // UserDefaults is documented thread-safe
@@ -24,22 +30,52 @@ public struct PluginConfig: Sendable {
                 tokenKey: String = defaultTokenKey,
                 ingestTokenKey: String = defaultIngestTokenKey,
                 hostKey: String = defaultHostKey,
-                port: Int = defaultPort) {
+                port: Int = defaultPort,
+                fallbackHostKey: String = defaultFallbackHostKey,
+                bffHostKey: String = defaultBFFHostKey,
+                adoptedAtKey: String = defaultAdoptedAtKey) {
         self.keychain = keychain
         self.defaults = defaults
         self.tokenKey = tokenKey
         self.ingestTokenKey = ingestTokenKey
         self.hostKey = hostKey
         self.port = port
+        self.fallbackHostKey = fallbackHostKey
+        self.bffHostKey = bffHostKey
+        self.adoptedAtKey = adoptedAtKey
     }
 
     public var token: String? { keychain.string(forKey: tokenKey) }
     public var host: String? { defaults.string(forKey: hostKey) }
     public var ingestToken: String? { keychain.string(forKey: ingestTokenKey) }
+    public var fallbackHost: String? { defaults.string(forKey: fallbackHostKey) }
+    public var newsroomBFFHost: String? { defaults.string(forKey: bffHostKey) }
+    public var adoptedProvisionedAt: Date? { defaults.object(forKey: adoptedAtKey) as? Date }
 
     public func setToken(_ token: String?) { keychain.set(token, forKey: tokenKey) }
     public func setHost(_ host: String?) { defaults.set(host, forKey: hostKey) }
     public func setIngestToken(_ token: String?) { keychain.set(token, forKey: ingestTokenKey) }
+
+    /// E9 §1b — first-launch adoption. Adopt when the Keychain has no token (fresh install,
+    /// reinstall, wiped keychain) OR the bundle record is newer than the last adopted one
+    /// (a redeploy deliberately wins over manual edits — mechanism A). Bundle values are
+    /// bootstrap-only after first brain contact (refreshFromBrain never touches the stamp).
+    @discardableResult
+    public func adoptBundleProvisioning(_ record: ProvisioningRecord?) -> Bool {
+        guard let record else { return false }
+        let keychainEmpty = (token ?? "").isEmpty
+        let newer = adoptedProvisionedAt.map { record.provisionedAt > $0 } ?? true
+        guard keychainEmpty || newer else { return false }
+        setHost(record.brainHost)
+        setToken(record.frontDoorToken)
+        if let ingest = record.ingestToken { setIngestToken(ingest) }
+        if let fallback = record.brainHostFallback { defaults.set(fallback, forKey: fallbackHostKey) }
+        else { defaults.removeObject(forKey: fallbackHostKey) }
+        if let bff = record.newsroomBFFHost { defaults.set(bff, forKey: bffHostKey) }
+        else { defaults.removeObject(forKey: bffHostKey) }
+        defaults.set(record.provisionedAt, forKey: adoptedAtKey)
+        return true
+    }
 
     /// Pure host → base URL: bare MagicDNS name (→ http://host:port), host:port, or a full URL.
     public func baseURL(forHost host: String?) -> URL? {
