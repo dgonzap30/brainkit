@@ -77,6 +77,23 @@ public struct PluginConfig: Sendable {
         return true
     }
 
+    /// E9 §1c — config authority inversion. Piggybacked on each app's existing sync cadence.
+    /// Applies hosts/BFF/tokens from the brain; deliberately never touches adoptedProvisionedAt
+    /// (bundle values are bootstrap-only after first contact). Empty values never clobber.
+    @discardableResult
+    public func refreshFromBrain(
+        fetch: @Sendable (BrainClient) async throws -> PairingConfig = { try await $0.pairingConfig() }
+    ) async -> Bool {
+        guard let client = makeClient() else { return false }
+        guard let cfg = try? await fetch(client) else { return false }
+        if let primary = cfg.hosts.first, !primary.isEmpty { setHost(primary) }
+        if cfg.hosts.count > 1, !cfg.hosts[1].isEmpty { defaults.set(cfg.hosts[1], forKey: fallbackHostKey) }
+        if let bff = cfg.newsroomBFFHost, !bff.isEmpty { defaults.set(bff, forKey: bffHostKey) }
+        if !cfg.token.value.isEmpty { setToken(cfg.token.value) }
+        if let ing = cfg.ingestToken?.value, !ing.isEmpty { setIngestToken(ing) }
+        return true
+    }
+
     /// Pure host → base URL: bare MagicDNS name (→ http://host:port), host:port, or a full URL.
     public func baseURL(forHost host: String?) -> URL? {
         guard let raw = host?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
