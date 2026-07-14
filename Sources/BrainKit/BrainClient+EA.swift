@@ -69,7 +69,9 @@ public extension BrainClient {
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
                     req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
-                    let (bytes, response) = try await session.bytes(for: req)
+                    let bytes: URLSession.AsyncBytes
+                    let response: URLResponse
+                    do { (bytes, response) = try await session.bytes(for: req) } catch { throw BrainError.unreachable }
                     try Self.checkEaStatus(response)
                     for try await line in bytes.lines {
                         guard let event = Self.parseEaSseLine(line) else { continue }
