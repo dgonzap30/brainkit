@@ -2,6 +2,16 @@
 
 All notable changes to BrainKit are documented here. Versioning follows [SemVer](https://semver.org); contract schema versions (`capture.v1`, `temper.v1`, …) evolve additively and are documented per release.
 
+## [0.4.0] — 2026-07-16
+
+### Added
+
+- **LodestarUI** — new product: shared design kit for the phone apps (app UI overhaul U1). OLED palette tokens (`LodestarColor`), SF-only type ramp helpers (`LodestarType`), spacing/radius metrics (`LodestarMetrics`), and components `StatusPill`, `EmptyState`, `SettingsSection`, `LodestarCard`, `LockedField`.
+- **Config-lock** (`LodestarPluginKit`) — per-field `userOverride` flags (`ProvisionedField`, `isOverridden`, `setOverridden`); `refreshFromBrain` skips overridden fields; `adoptBundleProvisioning` clears flags on adopt (redeploy wins). Additive; flags default false, so behavior is unchanged until an app's settings UI sets them.
+- **EA client** (`BrainKit`, merged pre-tag) — `eaThreads(q:limit:)` search/limit, `eaRenameThread`, EA thread list/create/get/archive + SSE send (U0 T4).
+
+No breaking changes.
+
 ## [0.3.0] — 2026-07-09
 
 ### Added
