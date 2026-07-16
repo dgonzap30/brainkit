@@ -1,10 +1,23 @@
 import Foundation
 
 public extension BrainClient {
-    /// GET /ea/threads — list. Same error mapping as `pairingConfig`/`frontDoor`.
+    /// GET /ea/threads — list, no filters. `EaClientProtocol` requires this exact zero-arg shape
+    /// (protocol requirements can't carry default argument values), so existential callers like
+    /// `EaThreadStore` keep resolving here; forwards to the `q`/`limit` overload below.
     func eaThreads() async throws -> [EaThread] {
+        try await eaThreads(q: nil, limit: nil)
+    }
+
+    /// GET /ea/threads?q=&limit= — list with optional search + limit (E9 exec-assistant search).
+    /// Same error mapping as `pairingConfig`/`frontDoor`.
+    func eaThreads(q: String? = nil, limit: Int? = nil) async throws -> [EaThread] {
         struct ListResponse: Decodable { let threads: [EaThread] }
-        var req = URLRequest(url: baseURL.appendingPathComponent("ea/threads"))
+        var comps = URLComponents(url: baseURL.appendingPathComponent("ea/threads"), resolvingAgainstBaseURL: false)!
+        var items: [URLQueryItem] = []
+        if let q, !q.isEmpty { items.append(URLQueryItem(name: "q", value: q)) }
+        if let limit { items.append(URLQueryItem(name: "limit", value: String(limit))) }
+        if !items.isEmpty { comps.queryItems = items }
+        var req = URLRequest(url: comps.url!)
         req.timeoutInterval = 15
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let data: Data, response: URLResponse
@@ -52,6 +65,19 @@ public extension BrainClient {
         req.timeoutInterval = 15
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         req.httpBody = Data("{}".utf8)
+        let response: URLResponse
+        do { (_, response) = try await session.data(for: req) } catch { throw BrainError.unreachable }
+        try Self.checkEaStatus(response)
+    }
+
+    /// PATCH /ea/threads/:id {title} — rename; expects `{ok:true}`.
+    func eaRenameThread(id: String, title: String) async throws {
+        var req = URLRequest(url: baseURL.appendingPathComponent("ea/threads/\(id)"))
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["title": title])
         let response: URLResponse
         do { (_, response) = try await session.data(for: req) } catch { throw BrainError.unreachable }
         try Self.checkEaStatus(response)
