@@ -7,11 +7,14 @@ let package = Package(
     products: [
         .library(name: "BrainKit", targets: ["BrainKit"]),
         .library(name: "LodestarPluginKit", targets: ["LodestarPluginKit"]),
+        .library(name: "LodestarUI", targets: ["LodestarUI"]),
     ],
     targets: [
         .target(name: "BrainKit"),
         .testTarget(name: "BrainKitTests", dependencies: ["BrainKit"]),
         .target(name: "LodestarPluginKit", dependencies: ["BrainKit"]),
         .testTarget(name: "LodestarPluginKitTests", dependencies: ["LodestarPluginKit"]),
+        .target(name: "LodestarUI"),
+        .testTarget(name: "LodestarUITests", dependencies: ["LodestarUI"]),
     ]
 )
