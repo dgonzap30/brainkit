@@ -1,6 +1,12 @@
 import Foundation
 import BrainKit
 
+/// A brain-provisioned connection field that the user can explicitly take over
+/// (config-lock, U1). Raw values are stable storage-key suffixes.
+public enum ProvisionedField: String, CaseIterable, Sendable {
+    case host, token, ingestToken
+}
+
 /// Reads/writes the mini host (UserDefaults) + the front-door + ingest tokens (Keychain) and builds a
 /// `BrainClient`. Generalises ReachCore's `ReachConfig`: the storage keys are now init parameters
 /// (defaulting to ReachConfig's exact constants, so Reach can adopt this with no behaviour change), and
@@ -52,6 +58,33 @@ public struct PluginConfig: Sendable {
     public var newsroomBFFHost: String? { defaults.string(forKey: bffHostKey) }
     public var adoptedProvisionedAt: Date? { defaults.object(forKey: adoptedAtKey) as? Date }
 
+    /// UserDefaults key for a field's userOverride flag — derived from the field's
+    /// configured storage key so parameterized configs (Temper, tests) never collide.
+    private func overrideKey(_ field: ProvisionedField) -> String {
+        let base: String
+        switch field {
+        case .host: base = hostKey
+        case .token: base = tokenKey
+        case .ingestToken: base = ingestTokenKey
+        }
+        return "\(base)_user_override"
+    }
+
+    /// True when the user explicitly took this field over ("Override?" confirm).
+    /// Overridden fields are skipped by refreshFromBrain until reset.
+    /// Device-local UserDefaults-tier state — the VALUE's storage (Keychain for
+    /// tokens) is unchanged; only the flag lives here.
+    public func isOverridden(_ field: ProvisionedField) -> Bool {
+        defaults.bool(forKey: overrideKey(field))
+    }
+
+    /// Set (confirmed override) or clear (reset to provisioned) a field's flag.
+    /// Clearing does not restore the brain value itself — the next refresh does.
+    public func setOverridden(_ field: ProvisionedField, _ overridden: Bool) {
+        if overridden { defaults.set(true, forKey: overrideKey(field)) }
+        else { defaults.removeObject(forKey: overrideKey(field)) }
+    }
+
     public func setToken(_ token: String?) { keychain.set(token, forKey: tokenKey) }
     public func setHost(_ host: String?) { defaults.set(host, forKey: hostKey) }
     public func setIngestToken(_ token: String?) { keychain.set(token, forKey: ingestTokenKey) }
@@ -74,23 +107,28 @@ public struct PluginConfig: Sendable {
         if let bff = record.newsroomBFFHost { defaults.set(bff, forKey: bffHostKey) }
         else { defaults.removeObject(forKey: bffHostKey) }
         defaults.set(record.provisionedAt, forKey: adoptedAtKey)
+        // Mechanism A: a redeploy deliberately wins over manual edits — a successful
+        // adopt therefore also clears userOverride flags, otherwise the freshly
+        // adopted values would be shadowed from the very next refresh onward.
+        for field in ProvisionedField.allCases { setOverridden(field, false) }
         return true
     }
 
     /// E9 §1c — config authority inversion. Piggybacked on each app's existing sync cadence.
     /// Applies hosts/BFF/tokens from the brain; deliberately never touches adoptedProvisionedAt
     /// (bundle values are bootstrap-only after first contact). Empty values never clobber.
+    /// U1 config-lock: fields whose userOverride flag is set are skipped — never clobbered.
     @discardableResult
     public func refreshFromBrain(
         fetch: @Sendable (BrainClient) async throws -> PairingConfig = { try await $0.pairingConfig() }
     ) async -> Bool {
         guard let client = makeClient() else { return false }
         guard let cfg = try? await fetch(client) else { return false }
-        if let primary = cfg.hosts.first, !primary.isEmpty { setHost(primary) }
+        if let primary = cfg.hosts.first, !primary.isEmpty, !isOverridden(.host) { setHost(primary) }
         if cfg.hosts.count > 1, !cfg.hosts[1].isEmpty { defaults.set(cfg.hosts[1], forKey: fallbackHostKey) }
         if let bff = cfg.newsroomBFFHost, !bff.isEmpty { defaults.set(bff, forKey: bffHostKey) }
-        if !cfg.token.value.isEmpty { setToken(cfg.token.value) }
-        if let ing = cfg.ingestToken?.value, !ing.isEmpty { setIngestToken(ing) }
+        if !cfg.token.value.isEmpty, !isOverridden(.token) { setToken(cfg.token.value) }
+        if let ing = cfg.ingestToken?.value, !ing.isEmpty, !isOverridden(.ingestToken) { setIngestToken(ing) }
         return true
     }
 
