@@ -94,8 +94,8 @@ public extension BrainClient {
 
     /// Lossy list decode: a malformed element is dropped, a non-envelope body → [] —
     /// same per-element robustness contract as BrainConnectorClient.decodeEnvelope.
-    /// `internal` so tests exercise it directly.
-    static func decodeAgentInboxList(_ data: Data) -> [AgentInboxItemDTO] {
+    /// `internal` so tests exercise it directly via `@testable import`.
+    internal static func decodeAgentInboxList(_ data: Data) -> [AgentInboxItemDTO] {
         struct FailableItem: Decodable {
             let value: AgentInboxItemDTO?
             init(from decoder: Decoder) throws { value = try? AgentInboxItemDTO(from: decoder) }
