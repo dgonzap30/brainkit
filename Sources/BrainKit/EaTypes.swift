@@ -7,13 +7,16 @@ public struct EaThread: Codable, Identifiable, Equatable, Sendable {
     public var status: String
     public var createdAt: String
     public var updatedAt: String
+    /// Last-turn excerpt for sidebar rows. Server-computed; only `GET /ea/threads` carries it.
+    public var preview: String?
 
-    public init(id: String, title: String, status: String, createdAt: String, updatedAt: String) {
+    public init(id: String, title: String, status: String, createdAt: String, updatedAt: String, preview: String? = nil) {
         self.id = id
         self.title = title
         self.status = status
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.preview = preview
     }
 }
 
@@ -54,9 +57,11 @@ struct EaSseFrame: Decodable {
 /// The capability Reach depends on — lets tests inject a mock without a network, mirroring `FrontDoorClient`.
 public protocol EaClientProtocol: Sendable {
     func eaThreads() async throws -> [EaThread]
+    func eaThreads(q: String?, limit: Int?) async throws -> [EaThread]
     func eaCreateThread(title: String?) async throws -> EaThread
     func eaThread(id: String) async throws -> (thread: EaThread, turns: [EaTurnDTO])
     func eaArchiveThread(id: String) async throws
+    func eaRenameThread(id: String, title: String) async throws
     func eaSend(threadId: String, text: String) -> AsyncThrowingStream<EaStreamEvent, Error>
 }
 

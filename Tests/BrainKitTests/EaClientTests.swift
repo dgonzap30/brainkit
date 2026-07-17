@@ -55,4 +55,11 @@ final class EaClientRequestTests: XCTestCase {
         _ = try await makeClient().eaThreads()
         XCTAssertNil(MockURLProtocol.lastRequest?.url?.query)
     }
+
+    func testEaThreadDecodesWithAndWithoutPreview() throws {
+        let with = Data(#"{"id":"t1","title":"Taco","status":"active","createdAt":"2026-07-16T12:00:00.000Z","updatedAt":"2026-07-16T12:00:00.000Z","preview":"logged $45"}"#.utf8)
+        let without = Data(#"{"id":"t2","title":"New thread","status":"active","createdAt":"c","updatedAt":"u"}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(EaThread.self, from: with).preview, "logged $45")
+        XCTAssertNil(try JSONDecoder().decode(EaThread.self, from: without).preview)
+    }
 }
