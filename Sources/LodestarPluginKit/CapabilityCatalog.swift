@@ -81,7 +81,9 @@ public struct CapabilityChecklistView: View {
     @ViewBuilder private func statusIcon(_ s: CapabilityStatus) -> some View {
         switch s {
         case .ok: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .actionNeeded: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+        // An unfinished setup step is a to-do, not an alarm — open circle like any incomplete
+        // checklist row; amber/orange stays reserved for was-working-now-broken states.
+        case .actionNeeded: Image(systemName: "circle").foregroundStyle(.secondary)
         case .unknown: Image(systemName: "minus.circle").foregroundStyle(.secondary)
         }
     }
