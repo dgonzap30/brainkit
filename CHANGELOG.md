@@ -2,6 +2,18 @@
 
 All notable changes to BrainKit are documented here. Versioning follows [SemVer](https://semver.org); contract schema versions (`capture.v1`, `temper.v1`, …) evolve additively and are documented per release.
 
+## [0.5.0] — 2026-07-20
+
+### Added
+
+- **Agent-inbox steer/revision fields** (`BrainKit`) — `AgentInboxItemDTO` gains `revisesId`, `steerNote`, `revisionMode` (all optional; present when an item re-proposes an earlier one after a user steer note) and `WritePlan.payload` (`[String: JSONValue]`, best-effort decoded — malformed/absent payload falls back to empty, never drops the item).
+
+### Fixed
+
+- **Checklist action-needed icon** (`LodestarPluginKit`) — incomplete setup steps in `CapabilityChecklistView` now render a quiet open circle instead of an amber alarm badge. An unfinished setup step is a to-do, not a failure; amber is reserved for was-working-now-broken states per the Lodestar design language.
+
+No breaking changes.
+
 ## [0.4.0] — 2026-07-16
 
 ### Added
