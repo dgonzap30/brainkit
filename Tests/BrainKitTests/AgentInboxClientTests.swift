@@ -32,6 +32,36 @@ final class AgentInboxClientTests: XCTestCase {
         XCTAssertNil(items[0].writePlan)
     }
 
+    func testDecodesSteerRevisionFieldsAndPayload() throws {
+        let json = """
+        {"items":[{"id":"rev:c1","kind":"memory","text":"Short","status":"proposed","confidence":0.7,
+          "observedAt":"2026-07-20T12:00:00.000Z","revisesId":"c1","steerNote":"shorter","revisionMode":"model",
+          "writePlan":{"id":"wp:rev:c1","appId":"lodestar-core","environment":"personal-local","target":"observations",
+                       "operation":"insert","mode":"life","rows":1,"payload":{"text":"Short","n":2}}}]}
+        """.data(using: .utf8)!
+        let items = BrainClient.decodeAgentInboxList(json)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0].revisesId, "c1")
+        XCTAssertEqual(items[0].steerNote, "shorter")
+        XCTAssertEqual(items[0].revisionMode, "model")
+        XCTAssertEqual(items[0].writePlan?.target, "observations")
+        XCTAssertEqual(items[0].writePlan?.payload["text"], .string("Short"))
+        XCTAssertEqual(items[0].writePlan?.payload["n"], .number(2))
+    }
+
+    func testLegacyItemsWithoutNewFieldsStillDecode() throws {
+        let json = """
+        {"items":[{"id":"c2","kind":"task","text":"T","status":"proposed","confidence":0.5,
+          "observedAt":"2026-07-20T12:00:00.000Z",
+          "writePlan":{"id":"wp:c2","appId":"lockin","environment":"personal-local","target":"tasks",
+                       "operation":"upsert","mode":"work","rows":1}}]}
+        """.data(using: .utf8)!
+        let items = BrainClient.decodeAgentInboxList(json)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertNil(items[0].revisesId)
+        XCTAssertEqual(items[0].writePlan?.payload, [:])
+    }
+
     func testDecodeActionResultOkAndFailure() throws {
         let ok = Data(#"{"ok":true,"itemId":"i1","status":"approved","actionId":"a1","dryRun":true}"#.utf8)
         let bad = Data(#"{"ok":false,"code":"stale_item","message":"newer plan exists","dryRun":true}"#.utf8)

@@ -13,9 +13,13 @@ public struct AgentInboxItemDTO: Codable, Identifiable, Equatable, Sendable {
         public let operation: String
         public let mode: String
         public let rows: Int
+        /// Arbitrary write-plan payload (e.g. the fields being inserted/upserted). Best-effort
+        /// decoded — a malformed or absent payload never drops the plan or its item, it just
+        /// falls back to empty.
+        public let payload: [String: JSONValue]
 
         public init(id: String, appId: String, environment: String, target: String,
-                    operation: String, mode: String, rows: Int) {
+                    operation: String, mode: String, rows: Int, payload: [String: JSONValue] = [:]) {
             self.id = id
             self.appId = appId
             self.environment = environment
@@ -23,6 +27,23 @@ public struct AgentInboxItemDTO: Codable, Identifiable, Equatable, Sendable {
             self.operation = operation
             self.mode = mode
             self.rows = rows
+            self.payload = payload
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, appId, environment, target, operation, mode, rows, payload
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            appId = try container.decode(String.self, forKey: .appId)
+            environment = try container.decode(String.self, forKey: .environment)
+            target = try container.decode(String.self, forKey: .target)
+            operation = try container.decode(String.self, forKey: .operation)
+            mode = try container.decode(String.self, forKey: .mode)
+            rows = try container.decode(Int.self, forKey: .rows)
+            payload = (try? container.decodeIfPresent([String: JSONValue].self, forKey: .payload)) ?? [:]
         }
     }
 
@@ -33,9 +54,15 @@ public struct AgentInboxItemDTO: Codable, Identifiable, Equatable, Sendable {
     public let confidence: Double
     public let observedAt: String
     public let writePlan: WritePlan?
+    /// Present when this item is a re-proposal of an earlier one (steer flow): the id of the
+    /// item it revises, the user's steer note, and how the revision was produced.
+    public let revisesId: String?
+    public let steerNote: String?
+    public let revisionMode: String?
 
     public init(id: String, kind: String, text: String, status: String,
-                confidence: Double, observedAt: String, writePlan: WritePlan?) {
+                confidence: Double, observedAt: String, writePlan: WritePlan?,
+                revisesId: String? = nil, steerNote: String? = nil, revisionMode: String? = nil) {
         self.id = id
         self.kind = kind
         self.text = text
@@ -43,6 +70,9 @@ public struct AgentInboxItemDTO: Codable, Identifiable, Equatable, Sendable {
         self.confidence = confidence
         self.observedAt = observedAt
         self.writePlan = writePlan
+        self.revisesId = revisesId
+        self.steerNote = steerNote
+        self.revisionMode = revisionMode
     }
 }
 
