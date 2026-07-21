@@ -12,15 +12,17 @@ public enum FrontDoorMode: String, Codable, Sendable {
     case auto, ask, capture
 }
 
-/// `POST /front-door` request body. `history` is optional and omitted when nil.
+/// `POST /front-door` request body. `history` and `attachments` are optional and omitted when nil.
 public struct FrontDoorRequest: Encodable, Sendable, Equatable {
     public let text: String
     public let mode: FrontDoorMode
     public let history: [HistoryTurn]?
-    public init(text: String, mode: FrontDoorMode, history: [HistoryTurn]? = nil) {
+    public let attachments: [String]?
+    public init(text: String, mode: FrontDoorMode, history: [HistoryTurn]? = nil, attachments: [String]? = nil) {
         self.text = text
         self.mode = mode
         self.history = history
+        self.attachments = attachments
     }
 }
 

@@ -62,4 +62,35 @@ final class EaClientRequestTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(EaThread.self, from: with).preview, "logged $45")
         XCTAssertNil(try JSONDecoder().decode(EaThread.self, from: without).preview)
     }
+
+    func testEaTurnDTODecodesAttachments() throws {
+        let json = #"{"id":"t1","role":"user","content":"look","error":null,"createdAt":"2026-07-20","attachments":[{"id":"a1","width":100,"height":50}]}"#
+        let dto = try JSONDecoder().decode(EaTurnDTO.self, from: Data(json.utf8))
+        XCTAssertEqual(dto.attachments, [AttachmentRef(id: "a1", width: 100, height: 50)])
+    }
+
+    func testEaTurnDTODecodesWithoutAttachments() throws {
+        let json = #"{"id":"t1","role":"user","content":"hi","error":null,"createdAt":"2026-07-20"}"#
+        XCTAssertNil(try JSONDecoder().decode(EaTurnDTO.self, from: Data(json.utf8)).attachments)
+    }
+
+    func testEaUploadAttachmentPostsJpegBytesAndDecodesRef() async throws {
+        respond(status: 200, json: #"{"id":"a1","width":100,"height":50}"#)
+        let ref = try await makeClient().eaUploadAttachment(jpegData: Data([0xFF, 0xD8, 0xFF]))
+        XCTAssertEqual(ref, AttachmentRef(id: "a1", width: 100, height: 50))
+        XCTAssertEqual(MockURLProtocol.lastRequest?.httpMethod, "POST")
+        XCTAssertEqual(MockURLProtocol.lastRequest?.url?.path, "/ea/attachments")
+        XCTAssertEqual(MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "Content-Type"), "image/jpeg")
+    }
+
+    func testEaAttachmentDataGetsRawBytes() async throws {
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0x01])
+        MockURLProtocol.handler = { req in
+            (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, jpeg)
+        }
+        let data = try await makeClient().eaAttachmentData(id: "a1")
+        XCTAssertEqual(data, jpeg)
+        XCTAssertEqual(MockURLProtocol.lastRequest?.httpMethod, "GET")
+        XCTAssertEqual(MockURLProtocol.lastRequest?.url?.path, "/ea/attachments/a1")
+    }
 }

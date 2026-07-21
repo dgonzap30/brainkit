@@ -50,4 +50,10 @@ final class TypesTests: XCTestCase {
             with: JSONEncoder().encode(FrontDoorRequest(text: "hi", mode: .auto))) as? [String: Any]
         XCTAssertNil(obj?["history"])  // Action-Button no-regression: no history key on the wire
     }
+
+    func testFrontDoorRequestOmitsNilAttachments() throws {
+        let body = try JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            FrontDoorRequest(text: "hi", mode: .auto))) as! [String: Any]
+        XCTAssertNil(body["attachments"])
+    }
 }

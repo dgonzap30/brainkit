@@ -28,13 +28,28 @@ public struct EaTurnDTO: Codable, Identifiable, Equatable, Sendable {
     public let content: String
     public let error: String?
     public let createdAt: String
+    /// Server omits this key entirely when a turn has no attachments — decodes to nil, not [].
+    public let attachments: [AttachmentRef]?
 
-    public init(id: String, role: String, content: String, error: String?, createdAt: String) {
+    public init(id: String, role: String, content: String, error: String?, createdAt: String, attachments: [AttachmentRef]? = nil) {
         self.id = id
         self.role = role
         self.content = content
         self.error = error
         self.createdAt = createdAt
+        self.attachments = attachments
+    }
+}
+
+/// A server-side JPEG attachment ref, as returned by `POST /ea/attachments` and carried on turn DTOs.
+public struct AttachmentRef: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let width: Int
+    public let height: Int
+    public init(id: String, width: Int, height: Int) {
+        self.id = id
+        self.width = width
+        self.height = height
     }
 }
 
@@ -62,7 +77,16 @@ public protocol EaClientProtocol: Sendable {
     func eaThread(id: String) async throws -> (thread: EaThread, turns: [EaTurnDTO])
     func eaArchiveThread(id: String) async throws
     func eaRenameThread(id: String, title: String) async throws
-    func eaSend(threadId: String, text: String) -> AsyncThrowingStream<EaStreamEvent, Error>
+    func eaSend(threadId: String, text: String, attachments: [String]) -> AsyncThrowingStream<EaStreamEvent, Error>
+    func eaUploadAttachment(jpegData: Data) async throws -> AttachmentRef
+    func eaAttachmentData(id: String) async throws -> Data
+}
+
+/// Convenience so pre-existing 2-arg call sites keep compiling without threading an empty array through.
+public extension EaClientProtocol {
+    func eaSend(threadId: String, text: String) -> AsyncThrowingStream<EaStreamEvent, Error> {
+        eaSend(threadId: threadId, text: text, attachments: [])
+    }
 }
 
 extension BrainClient: EaClientProtocol {}

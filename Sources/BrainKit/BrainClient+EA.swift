@@ -86,7 +86,7 @@ public extension BrainClient {
     /// POST /ea/threads/:id/messages — SSE stream. Server quirk: a mid-stream throw ends the
     /// stream with a `{"error":...}` frame and NO `done` frame — we yield `.error` and let the
     /// loop end naturally when the stream closes (do not require a trailing `done`).
-    func eaSend(threadId: String, text: String) -> AsyncThrowingStream<EaStreamEvent, Error> {
+    func eaSend(threadId: String, text: String, attachments: [String]) -> AsyncThrowingStream<EaStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -94,7 +94,9 @@ public extension BrainClient {
                     req.httpMethod = "POST"
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-                    req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
+                    var payload: [String: Any] = ["text": text]
+                    if !attachments.isEmpty { payload["attachments"] = attachments }
+                    req.httpBody = try JSONSerialization.data(withJSONObject: payload)
                     let bytes: URLSession.AsyncBytes
                     let response: URLResponse
                     do { (bytes, response) = try await session.bytes(for: req) } catch { throw BrainError.unreachable }
@@ -111,6 +113,31 @@ public extension BrainClient {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// POST /ea/attachments — raw JPEG body, returns the server-assigned ref.
+    func eaUploadAttachment(jpegData: Data) async throws -> AttachmentRef {
+        var req = URLRequest(url: baseURL.appendingPathComponent("ea/attachments"))
+        req.httpMethod = "POST"
+        req.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 30
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        req.httpBody = jpegData
+        let data: Data, response: URLResponse
+        do { (data, response) = try await session.data(for: req) } catch { throw BrainError.unreachable }
+        try Self.checkEaStatus(response)
+        do { return try JSONDecoder().decode(AttachmentRef.self, from: data) } catch { throw BrainError.decoding }
+    }
+
+    /// GET /ea/attachments/:id — JPEG bytes for history thumbnails.
+    func eaAttachmentData(id: String) async throws -> Data {
+        var req = URLRequest(url: baseURL.appendingPathComponent("ea/attachments/\(id)"))
+        req.timeoutInterval = 30
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let data: Data, response: URLResponse
+        do { (data, response) = try await session.data(for: req) } catch { throw BrainError.unreachable }
+        try Self.checkEaStatus(response)
+        return data
     }
 
     /// Pure — classifies one raw SSE `data: {...}` line into an `EaStreamEvent`. No network.
