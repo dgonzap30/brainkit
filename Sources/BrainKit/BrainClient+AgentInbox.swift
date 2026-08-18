@@ -110,10 +110,16 @@ public extension BrainClient {
     }
 
     /// POST /core/agent/inbox/decide — dry-run approval/dismissal (never executes).
+    ///
+    /// Carries `approverToken` because this is the ONE route that gates on it: when the target item
+    /// is an exec candidate the brain requires `X-Lodestar-Approver` and 403s without it
+    /// (`core/http.ts` `/core/agent/inbox/decide`). The gate keys off the item's exec-ness, not the
+    /// decision, so dismissing/steering an exec candidate needs the credential just as approving
+    /// does — hence it rides every decide, not just `decision == "approved"`.
     func decideAgentInboxItem(id: String, decision: String, actor: String, reason: String? = nil) async throws -> AgentInboxActionResult {
         var body: [String: Any] = ["itemId": id, "decision": decision, "actor": actor]
         if let reason { body["reason"] = reason }
-        return try await postInboxAction(path: "core/agent/inbox/decide", body: body)
+        return try await postInboxAction(path: "core/agent/inbox/decide", body: body, approverToken: approverToken)
     }
 
     /// POST /core/agent/inbox/execute — policy-checked execution of an approved item
@@ -135,12 +141,18 @@ public extension BrainClient {
         return env.items.compactMap(\.value)
     }
 
-    private func postInboxAction(path: String, body: [String: Any]) async throws -> AgentInboxActionResult {
+    /// `approverToken` defaults to nil so /execute — which has no approver gate server-side — keeps
+    /// sending only the front-door bearer. The secret goes to the one route that checks it, and no
+    /// further.
+    private func postInboxAction(path: String, body: [String: Any], approverToken: String? = nil) async throws -> AgentInboxActionResult {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 15
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let approverToken, !approverToken.isEmpty {
+            req.setValue("Bearer \(approverToken)", forHTTPHeaderField: "x-lodestar-approver")
+        }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let data: Data, response: URLResponse
         do { (data, response) = try await session.data(for: req) } catch { throw BrainError.unreachable }

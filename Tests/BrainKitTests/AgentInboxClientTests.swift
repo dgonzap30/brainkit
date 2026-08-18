@@ -73,4 +73,64 @@ final class AgentInboxClientTests: XCTestCase {
         XCTAssertEqual(badResult.code, "stale_item")
         XCTAssertEqual(badResult.message, "newer plan exists")
     }
+
+    // MARK: exec-approver credential on the wire
+    //
+    // The brain 403s an exec-candidate decision that arrives without `x-lodestar-approver`
+    // (core/http.ts, /core/agent/inbox/decide). Reach never sent that header, so the next exec
+    // approval would have failed with no audit trace. These pin the header onto the wire.
+
+    private func makeClient(approverToken: String?) -> BrainClient {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = [MockURLProtocol.self]
+        return BrainClient(baseURL: URL(string: "http://mini:4317")!, token: "fd-tok",
+                           approverToken: approverToken, session: URLSession(configuration: cfg))
+    }
+
+    private func respondOK() {
+        MockURLProtocol.handler = { req in
+            let resp = HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (resp, Data(#"{"ok":true}"#.utf8))
+        }
+    }
+
+    override func tearDown() { MockURLProtocol.handler = nil; MockURLProtocol.lastRequest = nil }
+
+    func testDecideSendsApproverHeaderAlongsideFrontDoorBearer() async throws {
+        respondOK()
+        _ = try await makeClient(approverToken: "appr-tok")
+            .decideAgentInboxItem(id: "cap:x", decision: "approved", actor: "diego")
+        let req = MockURLProtocol.lastRequest
+        XCTAssertEqual(req?.url?.path, "/core/agent/inbox/decide")
+        XCTAssertEqual(req?.value(forHTTPHeaderField: "x-lodestar-approver"), "Bearer appr-tok")
+        // The approver credential is ADDITIONAL to the front-door bearer, never a replacement.
+        XCTAssertEqual(req?.value(forHTTPHeaderField: "Authorization"), "Bearer fd-tok")
+    }
+
+    func testDecideOmitsApproverHeaderWhenUnset() async throws {
+        respondOK()
+        _ = try await makeClient(approverToken: nil)
+            .decideAgentInboxItem(id: "cap:x", decision: "dismissed", actor: "diego")
+        XCTAssertNil(MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "x-lodestar-approver"))
+    }
+
+    /// An empty Keychain string must behave like "unset", not send `Bearer ` with nothing after it.
+    func testDecideTreatsEmptyApproverTokenAsUnset() async throws {
+        respondOK()
+        _ = try await makeClient(approverToken: "")
+            .decideAgentInboxItem(id: "cap:x", decision: "approved", actor: "diego")
+        XCTAssertNil(MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "x-lodestar-approver"))
+    }
+
+    /// /execute has no approver gate server-side — the secret must not be sprayed at routes that
+    /// do not check it.
+    func testExecuteDoesNotSendApproverHeader() async throws {
+        respondOK()
+        _ = try await makeClient(approverToken: "appr-tok")
+            .executeAgentInboxItem(id: "cap:x", actor: "diego")
+        let req = MockURLProtocol.lastRequest
+        XCTAssertEqual(req?.url?.path, "/core/agent/inbox/execute")
+        XCTAssertNil(req?.value(forHTTPHeaderField: "x-lodestar-approver"))
+        XCTAssertEqual(req?.value(forHTTPHeaderField: "Authorization"), "Bearer fd-tok")
+    }
 }

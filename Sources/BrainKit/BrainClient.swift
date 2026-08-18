@@ -18,11 +18,18 @@ public extension FrontDoorClient {
 public struct BrainClient: FrontDoorClient {
     public let baseURL: URL
     public let token: String?
+    /// The exec-approval credential (`LODESTAR_APPROVER_TOKEN` server-side), sent as
+    /// `X-Lodestar-Approver` on agent-inbox decisions only. Deliberately SEPARATE from `token`:
+    /// the front-door bearer is also held by the EA runner, so a runner that holds it must not be
+    /// able to self-approve an exec candidate (u5d design F1). nil on every non-Reach client — the
+    /// macOS app and the ledger/temper/rundown plugins never approve exec items.
+    public let approverToken: String?
     internal let session: URLSession
 
-    public init(baseURL: URL, token: String?, session: URLSession = .shared) {
+    public init(baseURL: URL, token: String?, approverToken: String? = nil, session: URLSession = .shared) {
         self.baseURL = baseURL
         self.token = token
+        self.approverToken = approverToken
         self.session = session
     }
 
