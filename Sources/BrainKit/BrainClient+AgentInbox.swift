@@ -113,7 +113,11 @@ public extension BrainClient {
     func decideAgentInboxItem(id: String, decision: String, actor: String, reason: String? = nil) async throws -> AgentInboxActionResult {
         var body: [String: Any] = ["itemId": id, "decision": decision, "actor": actor]
         if let reason { body["reason"] = reason }
-        return try await postInboxAction(path: "core/agent/inbox/decide", body: body)
+        return try await postInboxAction(
+            path: "core/agent/inbox/decide",
+            body: body,
+            includeReviewCapability: decision == "approved"
+        )
     }
 
     /// POST /core/agent/inbox/execute — policy-checked execution of an approved item
@@ -135,12 +139,24 @@ public extension BrainClient {
         return env.items.compactMap(\.value)
     }
 
-    private func postInboxAction(path: String, body: [String: Any]) async throws -> AgentInboxActionResult {
+    private func postInboxAction(
+        path: String,
+        body: [String: Any],
+        includeReviewCapability: Bool = false
+    ) async throws -> AgentInboxActionResult {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 15
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if includeReviewCapability,
+           let reviewCapability = reviewCapability?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !reviewCapability.isEmpty {
+            req.setValue(
+                reviewCapability,
+                forHTTPHeaderField: "X-Lodestar-Review-Capability"
+            )
+        }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let data: Data, response: URLResponse
         do { (data, response) = try await session.data(for: req) } catch { throw BrainError.unreachable }

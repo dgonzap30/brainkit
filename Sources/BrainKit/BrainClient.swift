@@ -18,11 +18,19 @@ public extension FrontDoorClient {
 public struct BrainClient: FrontDoorClient {
     public let baseURL: URL
     public let token: String?
+    /// Device-local, out-of-band Review authority. It is never returned by pairing/config.
+    public let reviewCapability: String?
     internal let session: URLSession
 
-    public init(baseURL: URL, token: String?, session: URLSession = .shared) {
+    public init(
+        baseURL: URL,
+        token: String?,
+        reviewCapability: String? = nil,
+        session: URLSession = .shared
+    ) {
         self.baseURL = baseURL
         self.token = token
+        self.reviewCapability = reviewCapability
         self.session = session
     }
 

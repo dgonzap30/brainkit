@@ -2,6 +2,55 @@ import XCTest
 @testable import BrainKit
 
 final class AgentInboxClientTests: XCTestCase {
+    override func tearDown() {
+        MockURLProtocol.handler = nil
+        MockURLProtocol.lastRequest = nil
+    }
+
+    func testApprovalSendsScopedReviewCapabilityButDismissalDoesNot() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data(#"{"ok":true}"#.utf8))
+        }
+        let client = BrainClient(
+            baseURL: URL(string: "http://mini:4317")!,
+            token: "front-door",
+            reviewCapability: "review-only",
+            session: session
+        )
+
+        _ = try await client.decideAgentInboxItem(
+            id: "candidate",
+            decision: "approved",
+            actor: "forged"
+        )
+        XCTAssertEqual(
+            MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Lodestar-Review-Capability"),
+            "review-only"
+        )
+        XCTAssertEqual(
+            MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"),
+            "Bearer front-door"
+        )
+
+        _ = try await client.decideAgentInboxItem(
+            id: "candidate",
+            decision: "dismissed",
+            actor: "forged"
+        )
+        XCTAssertNil(
+            MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Lodestar-Review-Capability")
+        )
+    }
+
     func testDecodeInboxListDropsMalformedItemsAndKeepsWritePlan() {
         let json = Data("""
         {"items": [
