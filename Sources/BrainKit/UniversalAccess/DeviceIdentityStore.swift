@@ -111,12 +111,43 @@ public struct DeviceIdentityV1: Sendable {
         try metadata.validate()
         self.init(metadata: metadata, signer: pending.signer)
     }
+
+    public init(
+        rotationReceipt receipt: KeyRotationReceiptV1,
+        current: DeviceIdentityV1,
+        pending: PendingDeviceIdentityV1
+    ) throws {
+        try receipt.validate()
+        try current.metadata.validate()
+        guard receipt.deviceId == current.metadata.deviceId,
+              receipt.keyVersion == current.metadata.keyVersion + 1,
+              pending.label == current.metadata.label,
+              pending.profile == current.metadata.profile,
+              pending.publicKeyX963 != current.signer.publicKeyX963
+        else {
+            throw UniversalAccessError.invalidRequest
+        }
+        let metadata = DeviceIdentityMetadataV1(
+            serverOrigin: current.metadata.serverOrigin,
+            serverIdentity: current.metadata.serverIdentity,
+            tlsSPKISHA256: current.metadata.tlsSPKISHA256,
+            deviceId: current.metadata.deviceId,
+            label: current.metadata.label,
+            profile: current.metadata.profile,
+            scopes: current.metadata.scopes,
+            domains: current.metadata.domains,
+            keyVersion: receipt.keyVersion
+        )
+        try metadata.validate()
+        self.init(metadata: metadata, signer: pending.signer)
+    }
 }
 
 public protocol DeviceIdentityStoring: Sendable {
     func load() throws -> DeviceIdentityV1?
     func create(label: String, profile: DeviceProfileV1) throws -> PendingDeviceIdentityV1
     func savePairing(_ receipt: PairingReceiptV1, pending: PendingDeviceIdentityV1) throws
+    func saveRotation(_ receipt: KeyRotationReceiptV1, pending: PendingDeviceIdentityV1) throws
     func removeOperationalCredential() throws
 }
 
@@ -182,6 +213,20 @@ public final class SystemDeviceIdentityStore: DeviceIdentityStoring, @unchecked 
 
     public func savePairing(_ receipt: PairingReceiptV1, pending: PendingDeviceIdentityV1) throws {
         let identity = try DeviceIdentityV1(receipt: receipt, pending: pending)
+        try persist(identity: identity, pending: pending)
+    }
+
+    public func saveRotation(_ receipt: KeyRotationReceiptV1, pending: PendingDeviceIdentityV1) throws {
+        guard let current = try load() else { throw UniversalAccessError.notPaired }
+        let identity = try DeviceIdentityV1(
+            rotationReceipt: receipt,
+            current: current,
+            pending: pending
+        )
+        try persist(identity: identity, pending: pending)
+    }
+
+    private func persist(identity: DeviceIdentityV1, pending: PendingDeviceIdentityV1) throws {
         guard let storedSigner = pending.signer as? any StoredUniversalAccessSigner else {
             throw UniversalAccessError.credentialUnavailable
         }
@@ -195,12 +240,27 @@ public final class SystemDeviceIdentityStore: DeviceIdentityStoring, @unchecked 
             throw UniversalAccessError.credentialUnavailable
         }
 
+        let previous: [(String, Data?)]
+        do {
+            previous = try [Account.key, Account.keyKind, Account.metadata].map {
+                ($0, try keychain.data(account: $0))
+            }
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+
         do {
             try keychain.set(keyData, account: Account.key)
             try keychain.set(Data(storedSigner.storageKind.utf8), account: Account.keyKind)
             try keychain.set(metadataData, account: Account.metadata)
         } catch {
-            try? removeOperationalCredential()
+            for (account, data) in previous.reversed() {
+                if let data {
+                    try? keychain.set(data, account: account)
+                } else {
+                    try? keychain.remove(account: account)
+                }
+            }
             throw UniversalAccessError.credentialUnavailable
         }
     }

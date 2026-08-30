@@ -70,6 +70,118 @@ public final class UniversalAccessClient: @unchecked Sendable {
         pinningDelegate = nil
     }
 
+    public static func pair(
+        pairingCode: String,
+        label: String,
+        profile: DeviceProfileV1,
+        requestId: String,
+        identityStore: any DeviceIdentityStoring
+    ) async throws -> PairingReceiptV1 {
+        let challenge = try PairingCodeDecoder.challenge(from: pairingCode)
+        let delegate = UniversalTLSPinningDelegate(
+            expectedSPKISHA256: challenge.serverIdentity.tlsFingerprint
+        )
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        return try await pair(
+            challenge: challenge,
+            label: label,
+            profile: profile,
+            requestId: requestId,
+            identityStore: identityStore,
+            session: session,
+            pinningDelegate: delegate
+        )
+    }
+
+    static func pair(
+        pairingCode: String,
+        label: String,
+        profile: DeviceProfileV1,
+        requestId: String,
+        identityStore: any DeviceIdentityStoring,
+        session: URLSession
+    ) async throws -> PairingReceiptV1 {
+        try await pair(
+            challenge: PairingCodeDecoder.challenge(from: pairingCode),
+            label: label,
+            profile: profile,
+            requestId: requestId,
+            identityStore: identityStore,
+            session: session,
+            pinningDelegate: nil
+        )
+    }
+
+    private static func pair(
+        challenge: PairingChallengeV1,
+        label: String,
+        profile: DeviceProfileV1,
+        requestId: String,
+        identityStore: any DeviceIdentityStoring,
+        session: URLSession,
+        pinningDelegate: UniversalTLSPinningDelegate?
+    ) async throws -> PairingReceiptV1 {
+        guard challenge.scopeProfile == profile,
+              challenge.clientClass.rawValue == profile.rawValue
+        else {
+            throw UniversalAccessError.invalidRequest
+        }
+
+        let pending: PendingDeviceIdentityV1
+        do {
+            pending = try identityStore.create(label: label, profile: profile)
+        } catch let error as UniversalAccessError {
+            throw error
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+
+        let publicKey = pending.publicKeyX963.base64EncodedString()
+        let proof = [
+            "lodestar-pairing-proof-v1",
+            challenge.challengeId,
+            publicKey,
+        ].joined(separator: "\n")
+        let signature: String
+        do {
+            signature = try pending.signer.signDER(Data(proof.utf8)).base64EncodedString()
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        let request = PairingCompleteRequestV1(
+            requestId: requestId,
+            pairingCode: challenge.pairingCode,
+            label: label,
+            publicKeyX963: publicKey,
+            proofSignature: signature
+        )
+        let receipt = try await completePairing(
+            request,
+            using: challenge,
+            session: session,
+            pinningDelegate: pinningDelegate
+        )
+
+        do {
+            try receipt.validate()
+            _ = try DeviceIdentityV1(receipt: receipt, pending: pending)
+        } catch {
+            throw UniversalAccessError.decoding
+        }
+        do {
+            try identityStore.savePairing(receipt, pending: pending)
+        } catch let error as UniversalAccessError {
+            throw error
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        return receipt
+    }
+
     public static func completePairing(
         _ request: PairingCompleteRequestV1,
         using challenge: PairingChallengeV1
@@ -295,6 +407,83 @@ public final class UniversalAccessClient: @unchecked Sendable {
         )
     }
 
+    public func rotateSelf(requestId: String) async throws -> KeyRotationReceiptV1 {
+        let current: DeviceIdentityV1
+        do {
+            guard let loaded = try identityStore.load() else {
+                throw UniversalAccessError.notPaired
+            }
+            try loaded.metadata.validate()
+            current = loaded
+        } catch let error as UniversalAccessError {
+            throw error
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+
+        let pending: PendingDeviceIdentityV1
+        do {
+            pending = try identityStore.create(
+                label: current.metadata.label,
+                profile: current.metadata.profile
+            )
+        } catch let error as UniversalAccessError {
+            throw error
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        guard pending.publicKeyX963 != current.signer.publicKeyX963 else {
+            throw UniversalAccessError.credentialUnavailable
+        }
+
+        let publicKey = pending.publicKeyX963.base64EncodedString()
+        let proof = [
+            "lodestar-key-rotation-proof-v1",
+            current.metadata.deviceId,
+            String(current.metadata.keyVersion),
+            publicKey,
+            requestId,
+        ].joined(separator: "\n")
+        let signature: String
+        do {
+            signature = try pending.signer.signDER(Data(proof.utf8)).base64EncodedString()
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        let request = KeyRotationRequestV1(
+            requestId: requestId,
+            expectedKeyVersion: current.metadata.keyVersion,
+            newPublicKeyX963: publicKey,
+            newKeyProofSignature: signature
+        )
+        let receipt = try await rotateSelf(request)
+
+        do {
+            try receipt.validate()
+            guard receipt.requestId == requestId,
+                  receipt.deviceId == current.metadata.deviceId,
+                  receipt.keyVersion == current.metadata.keyVersion + 1
+            else {
+                throw UniversalAccessError.decoding
+            }
+            _ = try DeviceIdentityV1(
+                rotationReceipt: receipt,
+                current: current,
+                pending: pending
+            )
+        } catch {
+            throw UniversalAccessError.decoding
+        }
+        do {
+            try identityStore.saveRotation(receipt, pending: pending)
+        } catch let error as UniversalAccessError {
+            throw error
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        return receipt
+    }
+
     public func devices() async throws -> DeviceListResponseV1 {
         try await sendRead(path: "/v2/devices", response: DeviceListResponseV1.self)
     }
@@ -511,6 +700,177 @@ public final class UniversalAccessClient: @unchecked Sendable {
 
     private static func readRequestID() -> String {
         "request:\(UUID().uuidString.lowercased())"
+    }
+}
+
+private enum PairingCodeDecoder {
+    private static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+    private static let challengeByteCount = 16
+    private static let fingerprintByteCount = 32
+    private static let secretByteCount = 16
+
+    static func challenge(from code: String) throws -> PairingChallengeV1 {
+        do {
+            let normalized = try normalize(code)
+            let bytes = try decodeBase32(normalized)
+            guard encodeBase32(bytes) == normalized else {
+                throw PairingCodeError.invalid
+            }
+
+            var cursor = Cursor(bytes)
+            guard try cursor.byte() == 1 else { throw PairingCodeError.invalid }
+            let challengeBytes = try cursor.data(count: challengeByteCount)
+            let profileByte = try cursor.byte()
+            let profile: UniversalScopeProfile
+            let clientClass: UniversalClientClass
+            switch profileByte {
+            case 0:
+                profile = .reach
+                clientClass = .reach
+            case 1:
+                profile = .lodestar
+                clientClass = .lodestar
+            default:
+                throw PairingCodeError.invalid
+            }
+            let expirySeconds = try cursor.uint32()
+            let origin = try cursor.text()
+            let serverId = try cursor.text()
+            let displayName = try cursor.text()
+            let fingerprint = try cursor.data(count: fingerprintByteCount)
+            _ = try cursor.data(count: secretByteCount)
+            guard cursor.isAtEnd else { throw PairingCodeError.invalid }
+
+            let challenge = PairingChallengeV1(
+                schemaVersion: .pairingChallengeV1,
+                challengeId: "pairing-challenge:\(hex(challengeBytes))",
+                pairingCode: code,
+                clientClass: clientClass,
+                serverIdentity: ServerIdentityV1(
+                    serverId: serverId,
+                    displayName: displayName,
+                    origin: origin,
+                    tlsFingerprint: "sha256:\(hex(fingerprint))"
+                ),
+                scopeProfile: profile,
+                expiresAt: timestamp(secondsSince1970: expirySeconds)
+            )
+            try challenge.validate()
+            return challenge
+        } catch {
+            throw UniversalAccessError.invalidRequest
+        }
+    }
+
+    private static func normalize(_ code: String) throws -> String {
+        var normalized = ""
+        for character in code.uppercased() {
+            if character == "-" || character.isWhitespace { continue }
+            switch character {
+            case "O": normalized.append("0")
+            case "I", "L": normalized.append("1")
+            default: normalized.append(character)
+            }
+        }
+        guard !normalized.isEmpty, normalized.count <= 256 else {
+            throw PairingCodeError.invalid
+        }
+        return normalized
+    }
+
+    private static func decodeBase32(_ value: String) throws -> Data {
+        var bytes: [UInt8] = []
+        var buffer = 0
+        var bitCount = 0
+        for character in value {
+            guard let decoded = alphabet.firstIndex(of: character) else {
+                throw PairingCodeError.invalid
+            }
+            buffer = (buffer << 5) | decoded
+            bitCount += 5
+            if bitCount >= 8 {
+                bitCount -= 8
+                bytes.append(UInt8((buffer >> bitCount) & 0xff))
+                buffer &= bitCount == 0 ? 0 : (1 << bitCount) - 1
+            }
+        }
+        guard bitCount == 0 || buffer == 0 else { throw PairingCodeError.invalid }
+        return Data(bytes)
+    }
+
+    private static func encodeBase32(_ bytes: Data) -> String {
+        var output = ""
+        var buffer = 0
+        var bitCount = 0
+        for byte in bytes {
+            buffer = (buffer << 8) | Int(byte)
+            bitCount += 8
+            while bitCount >= 5 {
+                bitCount -= 5
+                output.append(alphabet[(buffer >> bitCount) & 31])
+                buffer &= bitCount == 0 ? 0 : (1 << bitCount) - 1
+            }
+        }
+        if bitCount > 0 {
+            output.append(alphabet[(buffer << (5 - bitCount)) & 31])
+        }
+        return output
+    }
+
+    private static func hex(_ data: Data) -> String {
+        data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func timestamp(secondsSince1970: UInt32) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(secondsSince1970)))
+    }
+
+    private enum PairingCodeError: Error {
+        case invalid
+    }
+
+    private struct Cursor {
+        private let bytes: Data
+        private(set) var offset = 0
+
+        init(_ bytes: Data) {
+            self.bytes = bytes
+        }
+
+        var isAtEnd: Bool { offset == bytes.count }
+
+        mutating func byte() throws -> UInt8 {
+            guard offset < bytes.count else { throw PairingCodeError.invalid }
+            defer { offset += 1 }
+            return bytes[offset]
+        }
+
+        mutating func data(count: Int) throws -> Data {
+            guard count >= 0, offset <= bytes.count - count else {
+                throw PairingCodeError.invalid
+            }
+            let result = bytes.subdata(in: offset ..< offset + count)
+            offset += count
+            return result
+        }
+
+        mutating func uint32() throws -> UInt32 {
+            let value = try data(count: 4)
+            return value.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+        }
+
+        mutating func text() throws -> String {
+            let length = Int(try byte())
+            guard length > 0,
+                  let value = String(data: try data(count: length), encoding: .utf8)
+            else {
+                throw PairingCodeError.invalid
+            }
+            return value
+        }
     }
 }
 

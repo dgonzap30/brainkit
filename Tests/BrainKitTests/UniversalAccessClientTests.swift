@@ -42,13 +42,26 @@ private final class UniversalAccessMockURLProtocol: URLProtocol {
 
 private final class TestDeviceIdentityStore: DeviceIdentityStoring, @unchecked Sendable {
     var identity: DeviceIdentityV1?
-    init(identity: DeviceIdentityV1?) { self.identity = identity }
+    var pendingSigners: [any UniversalAccessSigner]
+    var savePairingCount = 0
+    var saveRotationCount = 0
+    init(identity: DeviceIdentityV1?, pendingSigners: [any UniversalAccessSigner] = []) {
+        self.identity = identity
+        self.pendingSigners = pendingSigners
+    }
     func load() throws -> DeviceIdentityV1? { identity }
     func create(label: String, profile: DeviceProfileV1) throws -> PendingDeviceIdentityV1 {
-        try PendingDeviceIdentityV1(label: label, profile: profile, signer: testSoftwareSigner())
+        let signer = pendingSigners.isEmpty ? try testSoftwareSigner() : pendingSigners.removeFirst()
+        return try PendingDeviceIdentityV1(label: label, profile: profile, signer: signer)
     }
     func savePairing(_ receipt: PairingReceiptV1, pending: PendingDeviceIdentityV1) throws {
+        savePairingCount += 1
         identity = try DeviceIdentityV1(receipt: receipt, pending: pending)
+    }
+    func saveRotation(_ receipt: KeyRotationReceiptV1, pending: PendingDeviceIdentityV1) throws {
+        saveRotationCount += 1
+        guard let current = identity else { throw UniversalAccessError.notPaired }
+        identity = try DeviceIdentityV1(rotationReceipt: receipt, current: current, pending: pending)
     }
     func removeOperationalCredential() throws { identity = nil }
 }
@@ -221,6 +234,155 @@ final class UniversalAccessClientTests: XCTestCase {
         XCTAssertNil(sent.value(forHTTPHeaderField: "X-Lodestar-Signature"))
     }
 
+    func testHighLevelPairingDecodesCodeCreatesKeySignsProofAndStoresOnlyAfterReceiptValidation() async throws {
+        respondWithFixture("pairing-receipt.v1", status: 200)
+        let store = TestDeviceIdentityStore(identity: nil)
+        let code = "040128HK8HAPCXW8-K6NBQK6XXVZG0TFP-QPEJJT3MEHR76EHF-5XP6YS35EDT62WHD-DNMPWT9ECNW62VBG-DHJJWTBEESGPRTB4-78T38CRMEDJQ4XK5-E8X6RVV4CNSQ8RBJ-5NPPJVK91N66YS35-EDT62WH09NMPWT8E-8K77625F5CYQV2WQ-QW9SDRA8E959BMGW-PQ1VSHJXTWD3P7P1-9QZYXQECQEN9K23Q-CSAM8CS22400"
+
+        let receipt = try await UniversalAccessClient.pair(
+            pairingCode: code,
+            label: "Diego iPhone",
+            profile: .reach,
+            requestId: "request:pairing-0001",
+            identityStore: store,
+            session: testSession()
+        )
+
+        XCTAssertEqual(receipt.deviceId, store.identity?.metadata.deviceId)
+        XCTAssertEqual(store.savePairingCount, 1)
+        let sent = try XCTUnwrap(UniversalAccessMockURLProtocol.requests.first)
+        let body = try XCTUnwrap(sent.httpBody)
+        let request = try UniversalAccessJSON.decoder.decode(PairingCompleteRequestV1.self, from: body)
+        let publicKeyData = try XCTUnwrap(Data(base64Encoded: request.publicKeyX963))
+        let signatureData = try XCTUnwrap(Data(base64Encoded: request.proofSignature))
+        let signature = try P256.Signing.ECDSASignature(derRepresentation: signatureData)
+        let publicKey = try P256.Signing.PublicKey(x963Representation: publicKeyData)
+        let proof = "lodestar-pairing-proof-v1\npairing-challenge:00112233445566778899aabbccddeeff\n\(request.publicKeyX963)"
+        XCTAssertTrue(publicKey.isValidSignature(signature, for: Data(proof.utf8)))
+        XCTAssertEqual(request.pairingCode, code)
+    }
+
+    func testHighLevelPairingDoesNotStorePendingKeyWhenReceiptBindingIsInvalid() async throws {
+        var object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: fixtureData("pairing-receipt.v1")) as? [String: Any]
+        )
+        object["scopeProfile"] = "lodestar"
+        respond(status: 200, data: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+        let store = TestDeviceIdentityStore(identity: nil)
+        let code = "040128HK8HAPCXW8-K6NBQK6XXVZG0TFP-QPEJJT3MEHR76EHF-5XP6YS35EDT62WHD-DNMPWT9ECNW62VBG-DHJJWTBEESGPRTB4-78T38CRMEDJQ4XK5-E8X6RVV4CNSQ8RBJ-5NPPJVK91N66YS35-EDT62WH09NMPWT8E-8K77625F5CYQV2WQ-QW9SDRA8E959BMGW-PQ1VSHJXTWD3P7P1-9QZYXQECQEN9K23Q-CSAM8CS22400"
+
+        await XCTAssertThrowsErrorAsync(try await UniversalAccessClient.pair(
+            pairingCode: code,
+            label: "Diego iPhone",
+            profile: .reach,
+            requestId: "request:pairing-0001",
+            identityStore: store,
+            session: testSession()
+        )) { error in
+            XCTAssertEqual(error as? UniversalAccessError, .decoding)
+        }
+        XCTAssertNil(store.identity)
+        XCTAssertEqual(store.savePairingCount, 0)
+    }
+
+    func testHighLevelRotationProvesNewKeyAndPersistsItOnlyAfterBoundReceipt() async throws {
+        let oldSigner = try testSoftwareSigner(scalar: 1)
+        let newSigner = try testSoftwareSigner(scalar: 2)
+        let current = DeviceIdentityV1(
+            metadata: DeviceIdentityMetadataV1(
+                serverOrigin: URL(string: "https://mini.example")!,
+                serverIdentity: "server:mini",
+                tlsSPKISHA256: "sha256:\(String(repeating: "a", count: 64))",
+                deviceId: "device:test",
+                label: "Diego iPhone",
+                profile: .reach,
+                scopes: reachUniversalAccessScopes,
+                domains: [.inbox, .personal],
+                keyVersion: 1
+            ),
+            signer: oldSigner
+        )
+        let store = TestDeviceIdentityStore(identity: current, pendingSigners: [newSigner])
+        var sawOldIdentityBeforeResponse = false
+        UniversalAccessMockURLProtocol.handler = { request, _ in
+            sawOldIdentityBeforeResponse = store.identity?.metadata.keyVersion == 1
+            let body = request.httpBody ?? Data()
+            let rotation = try! UniversalAccessJSON.decoder.decode(KeyRotationRequestV1.self, from: body)
+            let publicKeyData = Data(base64Encoded: rotation.newPublicKeyX963)!
+            let signatureData = Data(base64Encoded: rotation.newKeyProofSignature)!
+            let signature = try! P256.Signing.ECDSASignature(derRepresentation: signatureData)
+            let publicKey = try! P256.Signing.PublicKey(x963Representation: publicKeyData)
+            let proof = "lodestar-key-rotation-proof-v1\ndevice:test\n1\n\(rotation.newPublicKeyX963)\nrequest:rotation-0001"
+            XCTAssertTrue(publicKey.isValidSignature(signature, for: Data(proof.utf8)))
+            let receipt = KeyRotationReceiptV1(
+                schemaVersion: .keyRotationReceiptV1,
+                requestId: "request:rotation-0001",
+                deviceId: "device:test",
+                keyVersion: 2,
+                rotatedAt: "2026-05-03T03:09:37.123Z"
+            )
+            let data = try! UniversalAccessJSON.encoder.encode(receipt)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
+        }
+        let client = UniversalAccessClient(
+            identityStore: store,
+            session: testSession(),
+            clock: SequenceClock([Date(timeIntervalSince1970: 1_777_777_777.123)]),
+            nonceGenerator: SequenceNonceGenerator([Data(repeating: 1, count: 16)]),
+            originOverride: nil
+        )
+
+        let receipt = try await client.rotateSelf(requestId: "request:rotation-0001")
+
+        XCTAssertTrue(sawOldIdentityBeforeResponse)
+        XCTAssertEqual(receipt.keyVersion, 2)
+        XCTAssertEqual(store.saveRotationCount, 1)
+        XCTAssertEqual(store.identity?.metadata.keyVersion, 2)
+        XCTAssertEqual(store.identity?.signer.publicKeyX963, newSigner.publicKeyX963)
+    }
+
+    func testHighLevelRotationKeepsCurrentLocalCredentialWhenReceiptDoesNotBindNextVersion() async throws {
+        let oldSigner = try testSoftwareSigner(scalar: 1)
+        let newSigner = try testSoftwareSigner(scalar: 2)
+        let current = DeviceIdentityV1(
+            metadata: DeviceIdentityMetadataV1(
+                serverOrigin: URL(string: "https://mini.example")!,
+                serverIdentity: "server:mini",
+                tlsSPKISHA256: "sha256:\(String(repeating: "a", count: 64))",
+                deviceId: "device:test",
+                label: "Diego iPhone",
+                profile: .reach,
+                scopes: reachUniversalAccessScopes,
+                domains: [.inbox, .personal],
+                keyVersion: 1
+            ),
+            signer: oldSigner
+        )
+        let store = TestDeviceIdentityStore(identity: current, pendingSigners: [newSigner])
+        let receipt = KeyRotationReceiptV1(
+            schemaVersion: .keyRotationReceiptV1,
+            requestId: "request:rotation-0001",
+            deviceId: "device:test",
+            keyVersion: 3,
+            rotatedAt: "2026-05-03T03:09:37.123Z"
+        )
+        respond(status: 200, data: try UniversalAccessJSON.encoder.encode(receipt))
+        let client = UniversalAccessClient(
+            identityStore: store,
+            session: testSession(),
+            clock: SequenceClock([Date(timeIntervalSince1970: 1_777_777_777.123)]),
+            nonceGenerator: SequenceNonceGenerator([Data(repeating: 1, count: 16)]),
+            originOverride: nil
+        )
+
+        await XCTAssertThrowsErrorAsync(try await client.rotateSelf(requestId: "request:rotation-0001")) { error in
+            XCTAssertEqual(error as? UniversalAccessError, .decoding)
+        }
+        XCTAssertEqual(store.saveRotationCount, 0)
+        XCTAssertEqual(store.identity?.metadata.keyVersion, 1)
+        XCTAssertEqual(store.identity?.signer.publicKeyX963, oldSigner.publicKeyX963)
+    }
+
     private func makeClient(originOverride: URL? = nil) throws -> UniversalAccessClient {
         let identity = DeviceIdentityV1(
             metadata: DeviceIdentityMetadataV1(
@@ -274,7 +436,11 @@ final class UniversalAccessClientTests: XCTestCase {
 }
 
 private func testSoftwareSigner() throws -> P256SoftwareUniversalAccessSigner {
+    try testSoftwareSigner(scalar: 1)
+}
+
+private func testSoftwareSigner(scalar: UInt8) throws -> P256SoftwareUniversalAccessSigner {
     var raw = Data(repeating: 0, count: 32)
-    raw[31] = 1
+    raw[31] = scalar
     return try P256SoftwareUniversalAccessSigner(rawPrivateKey: raw)
 }
