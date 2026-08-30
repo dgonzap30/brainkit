@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "pairing-receipt.v1",
+  "receiptId": "pairing-receipt:5cf1dc0657c6dcb612c998173e210b6a",
+  "deviceId": "device:a8d43b6b9ac940d6a87f2869be0d3cf2",
+  "clientClass": "reach",
+  "label": "Diego iPhone",
+  "keyVersion": 1,
+  "serverIdentity": {
+    "serverId": "server:lodestar-mini",
+    "displayName": "Lodestar Mini",
+    "origin": "https://lodestar-mini.example.invalid:443",
+    "tlsFingerprint": "sha256:0e44ce7308af2b3d7d8b97bf1396e148724a95d21cb5c3bcc65dd71a3b1ec14d"
+  },
+  "scopeProfile": "reach",
+  "scopes": [
+    "scope:devices.self.rotate",
+    "scope:universal.capture.write",
+    "scope:universal.claims.decide",
+    "scope:universal.claims.propose",
+    "scope:universal.claims.read",
+    "scope:universal.context.read",
+    "scope:universal.conversation.read",
+    "scope:universal.conversation.write",
+    "scope:universal.evidence.read"
+  ],
+  "domains": ["inbox", "personal"],
+  "defaultConversationId": "conversation:4f9ec5d323c72d68f2d15d268c18b1ef",
+  "pairedAt": "2026-08-29T18:30:00.000Z"
+}

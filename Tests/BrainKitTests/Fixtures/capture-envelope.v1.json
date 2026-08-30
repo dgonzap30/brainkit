@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "capture-envelope.v1",
+  "envelopeId": "11111111-1111-4111-8111-111111111111",
+  "capturedAt": "2026-08-29T12:34:56.789-06:00",
+  "source": "reach.app",
+  "clientConversationId": "22222222-2222-4222-8222-222222222222",
+  "text": "Remember the blue notebook.",
+  "attachments": [
+    {
+      "attachmentId": "33333333-3333-4333-8333-333333333333",
+      "ordinal": 0,
+      "mediaType": "image/jpeg",
+      "byteCount": 4,
+      "pixelWidth": 1,
+      "pixelHeight": 1,
+      "contentHash": "sha256:32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af",
+      "classificationHint": "restricted"
+    }
+  ],
+  "envelopeHash": "sha256:42bf8698d0449d424972627766f6698b60ac47db3450a3ea387d493a401a6ad3"
+}

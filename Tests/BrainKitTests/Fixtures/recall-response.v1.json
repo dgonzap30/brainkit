@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "recall-response.v1",
+  "requestId": "request:recall-0001",
+  "conversationId": "conversation:4f9ec5d323c72d68f2d15d268c18b1ef",
+  "generatedAt": "2026-08-29T18:40:00.000Z",
+  "effectiveAsOf": "2026-08-29T18:40:00.000Z",
+  "freshness": "current",
+  "contextPackHash": "sha256:702ce23d275656177a2da9bb0338413ede70714f207b83b99f3da3d5a9d2e01b",
+  "results": [
+    {
+      "id": "recall-result:46b382804148066b4b79a43a3be1db35",
+      "captureId": "capture:3e2b2747b615cfbc0e74508197411126",
+      "excerpt": "Remember the blue notebook.",
+      "uncertainty": "Exact capture match.",
+      "capturedAt": "2026-08-29T12:34:56.789-06:00",
+      "evidence": [
+        {
+          "id": "evidence:3e612704338c766768faf6db4cc7d5be",
+          "domain": "inbox",
+          "kind": "capture.text",
+          "classification": "private",
+          "observedAt": "2026-08-29T18:35:01.000Z",
+          "contentHash": "sha256:c8f9d594095295346276da1d4ade34c0610a68b505b5520d4275c9d2af9fe2f8",
+          "accessGrant": "grant_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+          "grantExpiresAt": "2026-08-29T18:50:00.000Z"
+        }
+      ]
+    }
+  ],
+  "redactions": [],
+  "gaps": ["Photo OCR is not available in Phase 2."],
+  "queryItemId": "conversation-item:55af58930fe6a85b3391e31da4d6703e",
+  "resultItemId": "conversation-item:4dce0f72ec1da00a502503d33561f518",
+  "narrative": {
+    "text": "You captured a reminder about the blue notebook.",
+    "citations": ["grant_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"]
+  },
+  "synthesisUnavailable": false
+}

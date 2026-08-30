@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "pulse-snapshot.v1",
+  "generatedAt": "2026-08-29T18:42:00.000Z",
+  "freshness": "current",
+  "recentItems": [
+    {
+      "id": "pulse-item:59b18b2a947355d0f92e780d863f195f",
+      "kind": "capture",
+      "title": "Blue notebook reminder",
+      "summary": "Remember the blue notebook.",
+      "effectiveAt": "2026-08-29T12:34:56.789-06:00",
+      "freshness": "current",
+      "gaps": [],
+      "evidence": [
+        {
+          "id": "evidence:3e612704338c766768faf6db4cc7d5be",
+          "domain": "inbox",
+          "kind": "capture.text",
+          "classification": "private",
+          "observedAt": "2026-08-29T18:35:01.000Z",
+          "contentHash": "sha256:c8f9d594095295346276da1d4ade34c0610a68b505b5520d4275c9d2af9fe2f8",
+          "accessGrant": "grant_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+          "grantExpiresAt": "2026-08-29T18:52:00.000Z"
+        }
+      ]
+    }
+  ],
+  "currentClaims": [],
+  "unresolvedQuestions": [
+    {
+      "id": "question:where-blue-notebook",
+      "text": "Where did I leave the blue notebook?",
+      "freshness": "unknown",
+      "gaps": ["No location evidence was captured."],
+      "evidence": []
+    }
+  ],
+  "quickRecall": {
+    "conversationId": "conversation:4f9ec5d323c72d68f2d15d268c18b1ef",
+    "placeholder": "Ask about recent captures"
+  },
+  "claimExceptionCount": 1,
+  "gaps": []
+}

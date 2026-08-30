@@ -11,7 +11,11 @@ let package = Package(
     ],
     targets: [
         .target(name: "BrainKit"),
-        .testTarget(name: "BrainKitTests", dependencies: ["BrainKit"]),
+        .testTarget(
+            name: "BrainKitTests",
+            dependencies: ["BrainKit"],
+            resources: [.process("Fixtures")]
+        ),
         .target(name: "LodestarPluginKit", dependencies: ["BrainKit"]),
         .testTarget(name: "LodestarPluginKitTests", dependencies: ["LodestarPluginKit"]),
         .target(name: "LodestarUI"),

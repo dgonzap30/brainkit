@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "capture-receipt.v1",
+  "envelopeId": "11111111-1111-4111-8111-111111111111",
+  "envelopeHash": "sha256:42bf8698d0449d424972627766f6698b60ac47db3450a3ea387d493a401a6ad3",
+  "captureId": "capture:3e2b2747b615cfbc0e74508197411126",
+  "conversationId": "conversation:4f9ec5d323c72d68f2d15d268c18b1ef",
+  "conversationItemId": "conversation-item:bb5a9de94a99c1516235f5806ef4506c",
+  "evidence": [
+    {
+      "id": "evidence:3e612704338c766768faf6db4cc7d5be",
+      "domain": "inbox",
+      "kind": "capture.text",
+      "classification": "private",
+      "observedAt": "2026-08-29T18:35:01.000Z",
+      "contentHash": "sha256:c8f9d594095295346276da1d4ade34c0610a68b505b5520d4275c9d2af9fe2f8",
+      "accessGrant": "grant_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "grantExpiresAt": "2026-08-29T18:45:01.000Z"
+    },
+    {
+      "id": "evidence:c9cd7b06a4277cbef611c9be1f9e7379",
+      "domain": "inbox",
+      "kind": "capture.photo",
+      "classification": "restricted",
+      "observedAt": "2026-08-29T18:35:01.000Z",
+      "contentHash": "sha256:32461d5bd1773012acef0ba15636752949bd7c2ce50f9172159d9f56cf0dd9af",
+      "accessGrant": "grant_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "grantExpiresAt": "2026-08-29T18:45:01.000Z"
+    }
+  ],
+  "eventId": "event:f3c394619c75681eb3e56a9f61501313",
+  "acceptedAt": "2026-08-29T18:35:01.000Z",
+  "requestReceiptId": "capture-receipt:16cb34b37ad7280d49b205249593db32",
+  "disposition": "inserted"
+}

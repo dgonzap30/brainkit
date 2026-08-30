@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "claim-decision.v1",
+  "decisionId": "claim-decision:74b3546c8a30cf7a276911bda318689c",
+  "requestId": "request:claim-decision-0001",
+  "conversationId": "conversation:4f9ec5d323c72d68f2d15d268c18b1ef",
+  "claimId": "claim:blue-notebook",
+  "expectedRevision": 1,
+  "decision": "correct",
+  "reason": "The notebook is navy, not blue.",
+  "priorRevisionId": "claim-revision:blue-notebook-1",
+  "resultingRevisionIds": ["claim-revision:blue-notebook-2", "claim-revision:navy-notebook-1"],
+  "replacementClaimId": "claim:navy-notebook",
+  "actorDeviceId": "device:a8d43b6b9ac940d6a87f2869be0d3cf2",
+  "authority": "human",
+  "requestHash": "sha256:3514f15f718c2f1c9afcbf35fb3661f64c0121aaeca8934a9ff31c2bb6f393b7",
+  "evidence": [
+    {
+      "id": "evidence:3e612704338c766768faf6db4cc7d5be",
+      "contentHash": "sha256:c8f9d594095295346276da1d4ade34c0610a68b505b5520d4275c9d2af9fe2f8"
+    }
+  ],
+  "conversationItemId": "conversation-item:6e93be1b47f3da2fb42446b67a42913a",
+  "decidedAt": "2026-08-29T18:44:00.000Z"
+}
