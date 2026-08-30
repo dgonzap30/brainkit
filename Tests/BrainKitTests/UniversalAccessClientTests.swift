@@ -334,6 +334,78 @@ final class UniversalAccessClientTests: XCTestCase {
         ])
     }
 
+    func testTask13ConversationRecallEvidenceAndPulseRoutesUseExactWireContract() async throws {
+        let threads = Data(#"{"schemaVersion":"cursor-page.v1","items":[{"id":"conversation:default","title":"Inbox","createdAt":"2026-08-29T22:00:00.000Z","updatedAt":"2026-08-29T22:00:00.000Z"}]}"#.utf8)
+        let items = Data(#"{"schemaVersion":"cursor-page.v1","items":[{"id":"conversation-item:one","conversationId":"conversation:default","kind":"capture","observedAt":"2026-08-29T22:00:00.000Z","effectiveAt":"2026-08-29T22:00:00.000Z","producer":"device:test","displayText":"Saved note","freshness":"current","evidence":[],"payloadHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#.utf8)
+        let recall = try fixtureData("recall-response.v1")
+        let pulse = try fixtureData("pulse-snapshot.v1")
+        let evidence = Data(#"{"schemaVersion":"evidence-response.v1","evidence":{"id":"evidence:contract","domain":"inbox","kind":"capture.text","classification":"private","observedAt":"2026-08-29T22:30:00.000Z","contentHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","accessGrant":"grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","grantExpiresAt":"2026-08-29T22:40:00.000Z"},"disposition":"metadata"}"#.utf8)
+        UniversalAccessMockURLProtocol.handler = { request, _ in
+            let data: Data
+            switch request.url?.path {
+            case "/v2/universal/conversations": data = threads
+            case "/v2/universal/conversations/conversation:default/items": data = items
+            case "/v2/universal/recall": data = recall
+            case "/v2/universal/evidence/grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": data = evidence
+            case "/v2/universal/pulse": data = pulse
+            default: data = Data()
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
+        }
+        let client = try makeClient(requestCount: 5)
+        let recallRequest = RecallRequestV1(
+            requestId: "request:recall-task13",
+            conversationId: "conversation:default",
+            query: "blue notebook",
+            limit: 10
+        )
+
+        _ = try await client.conversations(cursor: "c1_threads")
+        _ = try await client.conversationItems(conversationId: "conversation:default", cursor: "c1_items")
+        _ = try await client.recall(recallRequest)
+        _ = try await client.evidence(
+            accessGrant: "grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            representation: .metadata
+        )
+        _ = try await client.pulse()
+
+        let requests = UniversalAccessMockURLProtocol.requests
+        XCTAssertEqual(requests.map { "\($0.httpMethod!) \($0.url!.path)" }, [
+            "GET /v2/universal/conversations",
+            "GET /v2/universal/conversations/conversation:default/items",
+            "POST /v2/universal/recall",
+            "GET /v2/universal/evidence/grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "GET /v2/universal/pulse",
+        ])
+        XCTAssertEqual(URLComponents(url: requests[0].url!, resolvingAgainstBaseURL: false)?.queryItems, [
+            URLQueryItem(name: "cursor", value: "c1_threads"),
+        ])
+        XCTAssertEqual(URLComponents(url: requests[1].url!, resolvingAgainstBaseURL: false)?.queryItems, [
+            URLQueryItem(name: "cursor", value: "c1_items"),
+        ])
+        XCTAssertEqual(URLComponents(url: requests[3].url!, resolvingAgainstBaseURL: false)?.queryItems, [
+            URLQueryItem(name: "representation", value: "metadata"),
+        ])
+        XCTAssertEqual(requests.map { $0.value(forHTTPHeaderField: "Content-Type") }, [
+            nil, nil, "application/json", nil, nil,
+        ])
+    }
+
+    func testReachAndLodestarDecodeTheSameRecallResponse() async throws {
+        respondWithFixture("recall-response.v1", status: 200)
+        let request = RecallRequestV1(
+            requestId: "request:recall-shared-client",
+            conversationId: "conversation:default",
+            query: "blue notebook",
+            limit: 10
+        )
+
+        let reach = try await makeClient(profile: .reach).recall(request)
+        let lodestar = try await makeClient(profile: .lodestar).recall(request)
+
+        XCTAssertEqual(lodestar, reach)
+    }
+
     func testHighLevelPairingDecodesCodeCreatesKeySignsProofAndStoresOnlyAfterReceiptValidation() async throws {
         respondWithFixture("pairing-receipt.v1", status: 200)
         let store = TestDeviceIdentityStore(identity: nil)
@@ -483,7 +555,11 @@ final class UniversalAccessClientTests: XCTestCase {
         XCTAssertEqual(store.identity?.signer.publicKeyX963, oldSigner.publicKeyX963)
     }
 
-    private func makeClient(originOverride: URL? = nil, requestCount: Int = 2) throws -> UniversalAccessClient {
+    private func makeClient(
+        originOverride: URL? = nil,
+        requestCount: Int = 2,
+        profile: DeviceProfileV1 = .reach
+    ) throws -> UniversalAccessClient {
         let identity = DeviceIdentityV1(
             metadata: DeviceIdentityMetadataV1(
                 serverOrigin: URL(string: "https://mini.example")!,
@@ -491,8 +567,8 @@ final class UniversalAccessClientTests: XCTestCase {
                 tlsSPKISHA256: "sha256:\(String(repeating: "a", count: 64))",
                 deviceId: "device:test",
                 label: "Diego iPhone",
-                profile: .reach,
-                scopes: reachUniversalAccessScopes,
+                profile: profile,
+                scopes: profile == .reach ? reachUniversalAccessScopes : lodestarUniversalAccessScopes,
                 domains: [.inbox, .personal],
                 keyVersion: 1
             ),
