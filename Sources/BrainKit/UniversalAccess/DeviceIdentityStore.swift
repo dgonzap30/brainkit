@@ -143,11 +143,59 @@ public struct DeviceIdentityV1: Sendable {
     }
 }
 
+public struct PendingKeyRotationV1: Sendable {
+    public let request: KeyRotationRequestV1
+    public let label: String
+    public let profile: DeviceProfileV1
+    public let pending: PendingDeviceIdentityV1?
+
+    public init(
+        request: KeyRotationRequestV1,
+        pending: PendingDeviceIdentityV1
+    ) throws {
+        try self.init(
+            storedRequest: request,
+            label: pending.label,
+            profile: pending.profile,
+            pending: pending
+        )
+    }
+
+    fileprivate init(
+        storedRequest request: KeyRotationRequestV1,
+        label: String,
+        profile: DeviceProfileV1,
+        pending: PendingDeviceIdentityV1?
+    ) throws {
+        try request.validate()
+        guard (1 ... 80).contains(label.count),
+              !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        if let pending {
+            guard pending.label == label,
+                  pending.profile == profile,
+                  Data(base64Encoded: request.newPublicKeyX963) == pending.publicKeyX963
+            else {
+                throw UniversalAccessError.credentialUnavailable
+            }
+        }
+        self.request = request
+        self.label = label
+        self.profile = profile
+        self.pending = pending
+    }
+}
+
 public protocol DeviceIdentityStoring: Sendable {
     func load() throws -> DeviceIdentityV1?
     func create(label: String, profile: DeviceProfileV1) throws -> PendingDeviceIdentityV1
     func savePairing(_ receipt: PairingReceiptV1, pending: PendingDeviceIdentityV1) throws
     func saveRotation(_ receipt: KeyRotationReceiptV1, pending: PendingDeviceIdentityV1) throws
+    func loadPendingRotation() throws -> PendingKeyRotationV1?
+    func savePendingRotation(_ rotation: PendingKeyRotationV1) throws
+    func clearPendingRotation(requestId: String) throws
     func removeOperationalCredential() throws
 }
 
@@ -156,6 +204,15 @@ public final class SystemDeviceIdentityStore: DeviceIdentityStoring, @unchecked 
         static let metadata = "universal-access.metadata.v1"
         static let keyKind = "universal-access.key-kind.v1"
         static let key = "universal-access.operational-key.v1"
+        static let pendingRotation = "universal-access.pending-rotation.v1"
+        static let pendingRotationKeyKind = "universal-access.pending-rotation-key-kind.v1"
+        static let pendingRotationKey = "universal-access.pending-rotation-key.v1"
+    }
+
+    private struct StoredPendingRotationV1: Codable {
+        let request: KeyRotationRequestV1
+        let label: String
+        let profile: DeviceProfileV1
     }
 
     private let keychain: DeviceIdentityKeychain
@@ -181,19 +238,7 @@ public final class SystemDeviceIdentityStore: DeviceIdentityStoring, @unchecked 
             throw UniversalAccessError.credentialUnavailable
         }
 
-        let signer: any UniversalAccessSigner
-        do {
-            switch kind {
-            case "p256-secure-enclave-v1":
-                signer = try SecureEnclaveUniversalAccessSigner(protectedRepresentation: keyData)
-            case "p256-software-v1":
-                signer = try P256SoftwareUniversalAccessSigner(rawPrivateKey: keyData)
-            default:
-                throw UniversalAccessError.credentialUnavailable
-            }
-        } catch {
-            throw UniversalAccessError.credentialUnavailable
-        }
+        let signer = try restoreSigner(kind: kind, keyData: keyData)
         return DeviceIdentityV1(metadata: metadata, signer: signer)
     }
 
@@ -224,6 +269,125 @@ public final class SystemDeviceIdentityStore: DeviceIdentityStoring, @unchecked 
             pending: pending
         )
         try persist(identity: identity, pending: pending)
+    }
+
+    public func loadPendingRotation() throws -> PendingKeyRotationV1? {
+        guard let metadataData = try keychain.data(account: Account.pendingRotation) else {
+            return nil
+        }
+        let stored: StoredPendingRotationV1
+        do {
+            stored = try JSONDecoder().decode(StoredPendingRotationV1.self, from: metadataData)
+            try stored.request.validate()
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+
+        let kindData = try keychain.data(account: Account.pendingRotationKeyKind)
+        let keyData = try keychain.data(account: Account.pendingRotationKey)
+        let pending: PendingDeviceIdentityV1?
+        if let kindData,
+           let kind = String(data: kindData, encoding: .utf8),
+           let keyData {
+            do {
+                pending = try PendingDeviceIdentityV1(
+                    label: stored.label,
+                    profile: stored.profile,
+                    signer: restoreSigner(kind: kind, keyData: keyData)
+                )
+            } catch {
+                pending = nil
+            }
+        } else {
+            pending = nil
+        }
+        return try PendingKeyRotationV1(
+            storedRequest: stored.request,
+            label: stored.label,
+            profile: stored.profile,
+            pending: pending
+        )
+    }
+
+    public func savePendingRotation(_ rotation: PendingKeyRotationV1) throws {
+        guard let pending = rotation.pending,
+              let storedSigner = pending.signer as? any StoredUniversalAccessSigner
+        else {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        if let existing = try loadPendingRotation() {
+            guard existing.request == rotation.request,
+                  existing.label == rotation.label,
+                  existing.profile == rotation.profile,
+                  existing.pending?.publicKeyX963 == pending.publicKeyX963
+            else {
+                throw UniversalAccessError.credentialUnavailable
+            }
+            return
+        }
+
+        let metadataData: Data
+        let keyData: Data
+        do {
+            metadataData = try JSONEncoder().encode(StoredPendingRotationV1(
+                request: rotation.request,
+                label: rotation.label,
+                profile: rotation.profile
+            ))
+            keyData = try storedSigner.protectedStorageRepresentation()
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        let accounts = [
+            Account.pendingRotationKey,
+            Account.pendingRotationKeyKind,
+            Account.pendingRotation,
+        ]
+        let previous: [(String, Data?)]
+        do {
+            previous = try accounts.map { ($0, try keychain.data(account: $0)) }
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        do {
+            try keychain.set(keyData, account: Account.pendingRotationKey)
+            try keychain.set(
+                Data(storedSigner.storageKind.utf8),
+                account: Account.pendingRotationKeyKind
+            )
+            try keychain.set(metadataData, account: Account.pendingRotation)
+        } catch {
+            for (account, data) in previous.reversed() {
+                if let data {
+                    try? keychain.set(data, account: account)
+                } else {
+                    try? keychain.remove(account: account)
+                }
+            }
+            throw UniversalAccessError.credentialUnavailable
+        }
+    }
+
+    public func clearPendingRotation(requestId: String) throws {
+        guard let metadataData = try keychain.data(account: Account.pendingRotation) else {
+            return
+        }
+        let stored: StoredPendingRotationV1
+        do {
+            stored = try JSONDecoder().decode(StoredPendingRotationV1.self, from: metadataData)
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        guard stored.request.requestId == requestId else {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        do {
+            try keychain.remove(account: Account.pendingRotationKey)
+            try keychain.remove(account: Account.pendingRotationKeyKind)
+            try keychain.remove(account: Account.pendingRotation)
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
     }
 
     private func persist(identity: DeviceIdentityV1, pending: PendingDeviceIdentityV1) throws {
@@ -267,10 +431,35 @@ public final class SystemDeviceIdentityStore: DeviceIdentityStoring, @unchecked 
 
     public func removeOperationalCredential() throws {
         var firstError: Error?
-        for account in [Account.metadata, Account.keyKind, Account.key] {
+        for account in [
+            Account.metadata,
+            Account.keyKind,
+            Account.key,
+            Account.pendingRotation,
+            Account.pendingRotationKeyKind,
+            Account.pendingRotationKey,
+        ] {
             do { try keychain.remove(account: account) } catch { firstError = firstError ?? error }
         }
         if firstError != nil { throw UniversalAccessError.credentialUnavailable }
+    }
+
+    private func restoreSigner(
+        kind: String,
+        keyData: Data
+    ) throws -> any UniversalAccessSigner {
+        do {
+            switch kind {
+            case "p256-secure-enclave-v1":
+                return try SecureEnclaveUniversalAccessSigner(protectedRepresentation: keyData)
+            case "p256-software-v1":
+                return try P256SoftwareUniversalAccessSigner(rawPrivateKey: keyData)
+            default:
+                throw UniversalAccessError.credentialUnavailable
+            }
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
     }
 }
 

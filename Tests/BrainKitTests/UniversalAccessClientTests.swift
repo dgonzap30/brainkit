@@ -4,6 +4,7 @@ import CryptoKit
 
 private final class UniversalAccessMockURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest, Int) -> (HTTPURLResponse, Data))?
+    nonisolated(unsafe) static var failure: ((URLRequest, Int) -> Error?)?
     nonisolated(unsafe) static var requests: [URLRequest] = []
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -15,6 +16,10 @@ private final class UniversalAccessMockURLProtocol: URLProtocol {
         }
         let index = Self.requests.count
         Self.requests.append(captured)
+        if let error = Self.failure?(captured, index) {
+            client?.urlProtocol(self, didFailWithError: error)
+            return
+        }
         guard let handler = Self.handler else {
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
             return
@@ -45,6 +50,11 @@ private final class TestDeviceIdentityStore: DeviceIdentityStoring, @unchecked S
     var pendingSigners: [any UniversalAccessSigner]
     var savePairingCount = 0
     var saveRotationCount = 0
+    var savePendingRotationCount = 0
+    var clearPendingRotationCount = 0
+    var pendingRotation: PendingKeyRotationV1?
+    var saveRotationFailuresRemaining = 0
+    var clearPendingRotationFailuresRemaining = 0
     init(identity: DeviceIdentityV1?, pendingSigners: [any UniversalAccessSigner] = []) {
         self.identity = identity
         self.pendingSigners = pendingSigners
@@ -60,10 +70,33 @@ private final class TestDeviceIdentityStore: DeviceIdentityStoring, @unchecked S
     }
     func saveRotation(_ receipt: KeyRotationReceiptV1, pending: PendingDeviceIdentityV1) throws {
         saveRotationCount += 1
+        if saveRotationFailuresRemaining > 0 {
+            saveRotationFailuresRemaining -= 1
+            throw UniversalAccessError.credentialUnavailable
+        }
         guard let current = identity else { throw UniversalAccessError.notPaired }
         identity = try DeviceIdentityV1(rotationReceipt: receipt, current: current, pending: pending)
     }
-    func removeOperationalCredential() throws { identity = nil }
+    func loadPendingRotation() throws -> PendingKeyRotationV1? { pendingRotation }
+    func savePendingRotation(_ rotation: PendingKeyRotationV1) throws {
+        savePendingRotationCount += 1
+        pendingRotation = rotation
+    }
+    func clearPendingRotation(requestId: String) throws {
+        clearPendingRotationCount += 1
+        if clearPendingRotationFailuresRemaining > 0 {
+            clearPendingRotationFailuresRemaining -= 1
+            throw UniversalAccessError.credentialUnavailable
+        }
+        guard pendingRotation?.request.requestId == requestId else {
+            throw UniversalAccessError.credentialUnavailable
+        }
+        pendingRotation = nil
+    }
+    func removeOperationalCredential() throws {
+        identity = nil
+        pendingRotation = nil
+    }
 }
 
 private final class SequenceClock: UniversalAccessClock, @unchecked Sendable {
@@ -90,6 +123,7 @@ private final class SequenceNonceGenerator: UniversalNonceGenerating, @unchecked
 final class UniversalAccessClientTests: XCTestCase {
     override func tearDown() {
         UniversalAccessMockURLProtocol.handler = nil
+        UniversalAccessMockURLProtocol.failure = nil
         UniversalAccessMockURLProtocol.requests = []
     }
 
@@ -652,6 +686,163 @@ final class UniversalAccessClientTests: XCTestCase {
         XCTAssertEqual(store.identity?.signer.publicKeyX963, oldSigner.publicKeyX963)
     }
 
+    func testHighLevelRotationRecoversACommittedResponseLossWithThePersistedNewKey() async throws {
+        let oldSigner = try testSoftwareSigner(scalar: 1)
+        let newSigner = try testSoftwareSigner(scalar: 2)
+        let store = TestDeviceIdentityStore(
+            identity: rotationIdentity(signer: oldSigner),
+            pendingSigners: [newSigner]
+        )
+        let receipt = KeyRotationReceiptV1(
+            schemaVersion: .keyRotationReceiptV1,
+            requestId: "request:rotation-loss",
+            deviceId: "device:test",
+            keyVersion: 2,
+            rotatedAt: "2026-05-03T03:09:37.123Z"
+        )
+        UniversalAccessMockURLProtocol.failure = { _, index in
+            guard index == 0 else { return nil }
+            XCTAssertNotNil(store.pendingRotation)
+            return URLError(.networkConnectionLost)
+        }
+        UniversalAccessMockURLProtocol.handler = { request, index in
+            if index == 1 {
+                let body = #"{"schemaVersion":"universal-access-error.v1","requestId":"request:rotation-loss","category":"unauthenticated","message":"old key is no longer active","retryable":false}"#
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!,
+                    Data(body.utf8)
+                )
+            }
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                try! UniversalAccessJSON.encoder.encode(receipt)
+            )
+        }
+        let client = UniversalAccessClient(
+            identityStore: store,
+            session: testSession(),
+            clock: SequenceClock((0 ..< 3).map {
+                Date(timeIntervalSince1970: 1_777_777_777.123 + Double($0))
+            }),
+            nonceGenerator: SequenceNonceGenerator((1 ... 3).map {
+                Data(repeating: UInt8($0), count: 16)
+            }),
+            originOverride: nil
+        )
+
+        let recovered = try await client.rotateSelf(requestId: receipt.requestId)
+
+        XCTAssertEqual(recovered, receipt)
+        XCTAssertEqual(UniversalAccessMockURLProtocol.requests.count, 3)
+        XCTAssertTrue(request(UniversalAccessMockURLProtocol.requests[0], wasSignedBy: oldSigner))
+        XCTAssertTrue(request(UniversalAccessMockURLProtocol.requests[1], wasSignedBy: oldSigner))
+        XCTAssertTrue(request(UniversalAccessMockURLProtocol.requests[2], wasSignedBy: newSigner))
+        XCTAssertEqual(store.savePendingRotationCount, 1)
+        XCTAssertEqual(store.saveRotationCount, 1)
+        XCTAssertEqual(store.clearPendingRotationCount, 1)
+        XCTAssertNil(store.pendingRotation)
+        XCTAssertEqual(store.identity?.metadata.keyVersion, 2)
+        XCTAssertEqual(store.identity?.signer.publicKeyX963, newSigner.publicKeyX963)
+    }
+
+    func testHighLevelRotationResumesAfterLocalPromotionFailureAcrossClientRestart() async throws {
+        let oldSigner = try testSoftwareSigner(scalar: 1)
+        let newSigner = try testSoftwareSigner(scalar: 2)
+        let store = TestDeviceIdentityStore(
+            identity: rotationIdentity(signer: oldSigner),
+            pendingSigners: [newSigner]
+        )
+        store.saveRotationFailuresRemaining = 1
+        let receipt = KeyRotationReceiptV1(
+            schemaVersion: .keyRotationReceiptV1,
+            requestId: "request:rotation-persist",
+            deviceId: "device:test",
+            keyVersion: 2,
+            rotatedAt: "2026-05-03T03:09:37.123Z"
+        )
+        respond(status: 200, data: try UniversalAccessJSON.encoder.encode(receipt))
+        let first = UniversalAccessClient(
+            identityStore: store,
+            session: testSession(),
+            clock: SequenceClock([Date(timeIntervalSince1970: 1_777_777_777.123)]),
+            nonceGenerator: SequenceNonceGenerator([Data(repeating: 1, count: 16)]),
+            originOverride: nil
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await first.rotateSelf(requestId: receipt.requestId)
+        ) { error in
+            XCTAssertEqual(error as? UniversalAccessError, .credentialUnavailable)
+        }
+        XCTAssertNotNil(store.pendingRotation)
+        XCTAssertEqual(store.identity?.metadata.keyVersion, 1)
+
+        let restarted = UniversalAccessClient(
+            identityStore: store,
+            session: testSession(),
+            clock: SequenceClock([Date(timeIntervalSince1970: 1_777_777_778.123)]),
+            nonceGenerator: SequenceNonceGenerator([Data(repeating: 2, count: 16)]),
+            originOverride: nil
+        )
+        let recovered = try await restarted.rotateSelf(requestId: "request:new-invocation")
+
+        XCTAssertEqual(recovered, receipt)
+        XCTAssertEqual(store.savePendingRotationCount, 1)
+        XCTAssertEqual(store.saveRotationCount, 2)
+        XCTAssertNil(store.pendingRotation)
+        XCTAssertEqual(store.identity?.metadata.keyVersion, 2)
+        XCTAssertTrue(request(UniversalAccessMockURLProtocol.requests[0], wasSignedBy: oldSigner))
+        XCTAssertTrue(request(UniversalAccessMockURLProtocol.requests[1], wasSignedBy: newSigner))
+    }
+
+    func testHighLevelRotationFinishesPendingCleanupAfterPromotionAcrossClientRestart() async throws {
+        let oldSigner = try testSoftwareSigner(scalar: 1)
+        let newSigner = try testSoftwareSigner(scalar: 2)
+        let store = TestDeviceIdentityStore(
+            identity: rotationIdentity(signer: oldSigner),
+            pendingSigners: [newSigner]
+        )
+        store.clearPendingRotationFailuresRemaining = 1
+        let receipt = KeyRotationReceiptV1(
+            schemaVersion: .keyRotationReceiptV1,
+            requestId: "request:rotation-cleanup",
+            deviceId: "device:test",
+            keyVersion: 2,
+            rotatedAt: "2026-05-03T03:09:37.123Z"
+        )
+        respond(status: 200, data: try UniversalAccessJSON.encoder.encode(receipt))
+        let first = UniversalAccessClient(
+            identityStore: store,
+            session: testSession(),
+            clock: SequenceClock([Date(timeIntervalSince1970: 1_777_777_777.123)]),
+            nonceGenerator: SequenceNonceGenerator([Data(repeating: 1, count: 16)]),
+            originOverride: nil
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await first.rotateSelf(requestId: receipt.requestId)
+        ) { error in
+            XCTAssertEqual(error as? UniversalAccessError, .credentialUnavailable)
+        }
+        XCTAssertNotNil(store.pendingRotation)
+        XCTAssertEqual(store.identity?.metadata.keyVersion, 2)
+
+        let restarted = UniversalAccessClient(
+            identityStore: store,
+            session: testSession(),
+            clock: SequenceClock([Date(timeIntervalSince1970: 1_777_777_778.123)]),
+            nonceGenerator: SequenceNonceGenerator([Data(repeating: 2, count: 16)]),
+            originOverride: nil
+        )
+        let recovered = try await restarted.rotateSelf(requestId: "request:another-invocation")
+
+        XCTAssertEqual(recovered, receipt)
+        XCTAssertNil(store.pendingRotation)
+        XCTAssertEqual(store.saveRotationCount, 1)
+        XCTAssertEqual(store.clearPendingRotationCount, 2)
+        XCTAssertTrue(request(UniversalAccessMockURLProtocol.requests[1], wasSignedBy: newSigner))
+    }
+
     private func makeClient(
         originOverride: URL? = nil,
         requestCount: Int = 2,
@@ -681,6 +872,23 @@ final class UniversalAccessClientTests: XCTestCase {
                 Data(repeating: UInt8($0 + 1), count: 16)
             }),
             originOverride: originOverride
+        )
+    }
+
+    private func rotationIdentity(signer: any UniversalAccessSigner) -> DeviceIdentityV1 {
+        DeviceIdentityV1(
+            metadata: DeviceIdentityMetadataV1(
+                serverOrigin: URL(string: "https://mini.example")!,
+                serverIdentity: "server:mini",
+                tlsSPKISHA256: "sha256:\(String(repeating: "a", count: 64))",
+                deviceId: "device:test",
+                label: "Diego iPhone",
+                profile: .reach,
+                scopes: reachUniversalAccessScopes,
+                domains: [.inbox, .personal],
+                keyVersion: 1
+            ),
+            signer: signer
         )
     }
 
@@ -714,4 +922,35 @@ private func testSoftwareSigner(scalar: UInt8) throws -> P256SoftwareUniversalAc
     var raw = Data(repeating: 0, count: 32)
     raw[31] = scalar
     return try P256SoftwareUniversalAccessSigner(rawPrivateKey: raw)
+}
+
+private func request(
+    _ request: URLRequest,
+    wasSignedBy signer: any UniversalAccessSigner
+) -> Bool {
+    guard let url = request.url,
+          let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let method = request.httpMethod,
+          let bodyHash = request.value(forHTTPHeaderField: "X-Lodestar-Body-SHA256"),
+          let timestamp = request.value(forHTTPHeaderField: "X-Lodestar-Timestamp"),
+          let requestId = request.value(forHTTPHeaderField: "X-Lodestar-Request-Id"),
+          let nonce = request.value(forHTTPHeaderField: "X-Lodestar-Nonce"),
+          let encodedSignature = request.value(forHTTPHeaderField: "X-Lodestar-Signature"),
+          let signatureData = Data(base64Encoded: encodedSignature),
+          let signature = try? P256.Signing.ECDSASignature(derRepresentation: signatureData),
+          let publicKey = try? P256.Signing.PublicKey(x963Representation: signer.publicKeyX963)
+    else { return false }
+    let pathAndQuery = components.percentEncodedQuery.map {
+        "\(components.percentEncodedPath)?\($0)"
+    } ?? components.percentEncodedPath
+    let canonical = [
+        "lodestar-signature-v1",
+        method,
+        pathAndQuery,
+        bodyHash,
+        timestamp,
+        requestId,
+        nonce,
+    ].joined(separator: "\n")
+    return publicKey.isValidSignature(signature, for: Data(canonical.utf8))
 }

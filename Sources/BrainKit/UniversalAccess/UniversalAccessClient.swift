@@ -413,79 +413,202 @@ public final class UniversalAccessClient: @unchecked Sendable {
 
     public func rotateSelf(requestId: String) async throws -> KeyRotationReceiptV1 {
         let current: DeviceIdentityV1
+        let storedRotation: PendingKeyRotationV1?
         do {
             guard let loaded = try identityStore.load() else {
                 throw UniversalAccessError.notPaired
             }
             try loaded.metadata.validate()
             current = loaded
+            storedRotation = try identityStore.loadPendingRotation()
         } catch let error as UniversalAccessError {
             throw error
         } catch {
             throw UniversalAccessError.credentialUnavailable
         }
 
-        let pending: PendingDeviceIdentityV1
+        let rotation: PendingKeyRotationV1
+        if let storedRotation {
+            rotation = storedRotation
+        } else {
+            do {
+                let pending = try identityStore.create(
+                    label: current.metadata.label,
+                    profile: current.metadata.profile
+                )
+                guard pending.publicKeyX963 != current.signer.publicKeyX963 else {
+                    throw UniversalAccessError.credentialUnavailable
+                }
+                let publicKey = pending.publicKeyX963.base64EncodedString()
+                let proof = [
+                    "lodestar-key-rotation-proof-v1",
+                    current.metadata.deviceId,
+                    String(current.metadata.keyVersion),
+                    publicKey,
+                    requestId,
+                ].joined(separator: "\n")
+                let signature = try pending.signer
+                    .signDER(Data(proof.utf8))
+                    .base64EncodedString()
+                rotation = try PendingKeyRotationV1(
+                    request: KeyRotationRequestV1(
+                        requestId: requestId,
+                        expectedKeyVersion: current.metadata.keyVersion,
+                        newPublicKeyX963: publicKey,
+                        newKeyProofSignature: signature
+                    ),
+                    pending: pending
+                )
+                try identityStore.savePendingRotation(rotation)
+            } catch let error as UniversalAccessError {
+                throw error
+            } catch {
+                throw UniversalAccessError.credentialUnavailable
+            }
+        }
+
+        let newPublicKey: Data
         do {
-            pending = try identityStore.create(
-                label: current.metadata.label,
-                profile: current.metadata.profile
+            try rotation.request.validate()
+            guard rotation.label == current.metadata.label,
+                  rotation.profile == current.metadata.profile,
+                  let decoded = Data(base64Encoded: rotation.request.newPublicKeyX963)
+            else {
+                throw UniversalAccessError.credentialUnavailable
+            }
+            newPublicKey = decoded
+        } catch let error as UniversalAccessError {
+            throw error
+        } catch {
+            throw UniversalAccessError.credentialUnavailable
+        }
+
+        let awaitsPromotion = current.metadata.keyVersion == rotation.request.expectedKeyVersion
+        let alreadyPromoted = current.metadata.keyVersion == rotation.request.expectedKeyVersion + 1
+            && current.signer.publicKeyX963 == newPublicKey
+        let pending = rotation.pending
+        let newIdentity: DeviceIdentityV1?
+        if awaitsPromotion {
+            guard let pending,
+                  pending.publicKeyX963 == newPublicKey,
+                  current.signer.publicKeyX963 != newPublicKey
+            else {
+                throw UniversalAccessError.credentialUnavailable
+            }
+            newIdentity = try rotationIdentity(
+                current: current,
+                pending: pending,
+                keyVersion: rotation.request.expectedKeyVersion + 1
             )
-        } catch let error as UniversalAccessError {
-            throw error
-        } catch {
-            throw UniversalAccessError.credentialUnavailable
-        }
-        guard pending.publicKeyX963 != current.signer.publicKeyX963 else {
+        } else if alreadyPromoted {
+            newIdentity = nil
+        } else {
             throw UniversalAccessError.credentialUnavailable
         }
 
-        let publicKey = pending.publicKeyX963.base64EncodedString()
-        let proof = [
-            "lodestar-key-rotation-proof-v1",
-            current.metadata.deviceId,
-            String(current.metadata.keyVersion),
-            publicKey,
-            requestId,
-        ].joined(separator: "\n")
-        let signature: String
-        do {
-            signature = try pending.signer.signDER(Data(proof.utf8)).base64EncodedString()
-        } catch {
+        let signingIdentities: [DeviceIdentityV1]
+        if alreadyPromoted {
+            signingIdentities = [current]
+        } else if let newIdentity {
+            signingIdentities = storedRotation == nil
+                ? [current, newIdentity, current]
+                : [newIdentity, current, newIdentity]
+        } else {
             throw UniversalAccessError.credentialUnavailable
         }
-        let request = KeyRotationRequestV1(
-            requestId: requestId,
-            expectedKeyVersion: current.metadata.keyVersion,
-            newPublicKeyX963: publicKey,
-            newKeyProofSignature: signature
-        )
-        let receipt = try await rotateSelf(request)
+
+        var receipt: KeyRotationReceiptV1?
+        var lastError: UniversalAccessError = .transport
+        for (index, identity) in signingIdentities.enumerated() {
+            do {
+                receipt = try await sendRotation(rotation.request, identity: identity)
+                break
+            } catch let error as UniversalAccessError {
+                lastError = error
+                if index == signingIdentities.count - 1 || !Self.canTryAlternateRotationKey(after: error) {
+                    throw error
+                }
+            } catch {
+                throw UniversalAccessError.transport
+            }
+        }
+        guard let receipt else { throw lastError }
 
         do {
             try receipt.validate()
-            guard receipt.requestId == requestId,
+            guard receipt.requestId == rotation.request.requestId,
                   receipt.deviceId == current.metadata.deviceId,
-                  receipt.keyVersion == current.metadata.keyVersion + 1
+                  receipt.keyVersion == rotation.request.expectedKeyVersion + 1
             else {
                 throw UniversalAccessError.decoding
             }
-            _ = try DeviceIdentityV1(
-                rotationReceipt: receipt,
-                current: current,
-                pending: pending
-            )
+            if awaitsPromotion {
+                guard let pending else { throw UniversalAccessError.credentialUnavailable }
+                _ = try DeviceIdentityV1(
+                    rotationReceipt: receipt,
+                    current: current,
+                    pending: pending
+                )
+            }
         } catch {
             throw UniversalAccessError.decoding
         }
         do {
-            try identityStore.saveRotation(receipt, pending: pending)
+            if awaitsPromotion {
+                guard let pending else { throw UniversalAccessError.credentialUnavailable }
+                try identityStore.saveRotation(receipt, pending: pending)
+            }
+            try identityStore.clearPendingRotation(requestId: rotation.request.requestId)
         } catch let error as UniversalAccessError {
             throw error
         } catch {
             throw UniversalAccessError.credentialUnavailable
         }
         return receipt
+    }
+
+    private func sendRotation(
+        _ request: KeyRotationRequestV1,
+        identity: DeviceIdentityV1
+    ) async throws -> KeyRotationReceiptV1 {
+        try request.validate()
+        return try await sendBody(
+            method: "POST",
+            path: "/v2/devices/self/rotate",
+            requestId: request.requestId,
+            request: request,
+            response: KeyRotationReceiptV1.self,
+            identityOverride: identity
+        )
+    }
+
+    private func rotationIdentity(
+        current: DeviceIdentityV1,
+        pending: PendingDeviceIdentityV1,
+        keyVersion: Int
+    ) throws -> DeviceIdentityV1 {
+        let metadata = DeviceIdentityMetadataV1(
+            serverOrigin: current.metadata.serverOrigin,
+            serverIdentity: current.metadata.serverIdentity,
+            tlsSPKISHA256: current.metadata.tlsSPKISHA256,
+            deviceId: current.metadata.deviceId,
+            label: current.metadata.label,
+            profile: current.metadata.profile,
+            scopes: current.metadata.scopes,
+            domains: current.metadata.domains,
+            keyVersion: keyVersion
+        )
+        try metadata.validate()
+        return DeviceIdentityV1(metadata: metadata, signer: pending.signer)
+    }
+
+    private static func canTryAlternateRotationKey(after error: UniversalAccessError) -> Bool {
+        switch error {
+        case .transport, .unauthenticated:
+            return true
+        default:
+            return false
+        }
     }
 
     public func devices() async throws -> DeviceListResponseV1 {
@@ -530,7 +653,8 @@ public final class UniversalAccessClient: @unchecked Sendable {
         request: Request,
         contentType: String = UniversalAccessClient.jsonContentType,
         requestLimit: Int = UniversalAccessClient.standardRequestLimit,
-        response: Response.Type
+        response: Response.Type,
+        identityOverride: DeviceIdentityV1? = nil
     ) async throws -> Response {
         let body: Data
         do {
@@ -545,7 +669,8 @@ public final class UniversalAccessClient: @unchecked Sendable {
             requestId: requestId,
             body: body,
             contentType: contentType,
-            response: response
+            response: response,
+            identityOverride: identityOverride
         )
     }
 
@@ -556,17 +681,23 @@ public final class UniversalAccessClient: @unchecked Sendable {
         requestId: String,
         body: Data,
         contentType: String?,
-        response: Response.Type
+        response: Response.Type,
+        identityOverride: DeviceIdentityV1? = nil
     ) async throws -> Response {
         let identity: DeviceIdentityV1
-        do {
-            guard let loaded = try identityStore.load() else { throw UniversalAccessError.notPaired }
-            try loaded.metadata.validate()
-            identity = loaded
-        } catch let error as UniversalAccessError {
-            throw error
-        } catch {
-            throw UniversalAccessError.credentialUnavailable
+        if let identityOverride {
+            try identityOverride.metadata.validate()
+            identity = identityOverride
+        } else {
+            do {
+                guard let loaded = try identityStore.load() else { throw UniversalAccessError.notPaired }
+                try loaded.metadata.validate()
+                identity = loaded
+            } catch let error as UniversalAccessError {
+                throw error
+            } catch {
+                throw UniversalAccessError.credentialUnavailable
+            }
         }
 
         let origin = try resolvedOrigin(for: identity)
