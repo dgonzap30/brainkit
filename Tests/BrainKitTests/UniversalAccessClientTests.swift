@@ -391,6 +391,56 @@ final class UniversalAccessClientTests: XCTestCase {
         ])
     }
 
+    func testTask14ClaimCandidateExceptionAndDecisionRoutesUseExactWireContract() async throws {
+        let handle = #"{"id":"evidence:claim-wire","domain":"personal","kind":"capture.text","classification":"private","observedAt":"2026-08-29T22:00:00.000Z","contentHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","accessGrant":"grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","grantExpiresAt":"2026-08-29T22:10:00.000Z"}"#
+        let candidate = Data(#"{"schemaVersion":"claim-candidate-receipt.v1","requestId":"request:claim-candidate-wire","conversationId":"conversation:default","candidates":[{"claimId":"claim:wire","revision":1,"subjectId":"subject:wire","predicate":"personal.interpreted_context","kind":"fact","summary":"Remember the note.","value":{"remember":true},"confidence":1,"status":"candidate","evidence":[\#(handle)],"createdAt":"2026-08-29T22:00:00.000Z"}],"createdAt":"2026-08-29T22:00:00.000Z"}"#.utf8)
+        let exceptions = Data(#"{"schemaVersion":"cursor-page.v1","items":[{"claimId":"claim:wire","revision":1,"status":"candidate","summary":"Remember the note.","evidence":[\#(handle)],"updatedAt":"2026-08-29T22:00:00.000Z"}]}"#.utf8)
+        let decision = Data(#"{"schemaVersion":"claim-decision.v1","decisionId":"claim-decision:wire","requestId":"request:claim-decision-wire","conversationId":"conversation:default","claimId":"claim:wire","expectedRevision":1,"decision":"confirm","priorRevisionId":"claim-revision:wire-1","resultingRevisionIds":["claim-revision:wire-2"],"actorDeviceId":"device:test","authority":"human","requestHash":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidence":[{"id":"evidence:claim-wire","contentHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"conversationItemId":"conversation-item:claim-wire","decidedAt":"2026-08-29T22:01:00.000Z"}"#.utf8)
+        UniversalAccessMockURLProtocol.handler = { request, _ in
+            let data: Data
+            switch request.url?.path {
+            case "/v2/universal/claim-candidates": data = candidate
+            case "/v2/universal/claim-exceptions": data = exceptions
+            case "/v2/universal/claim-decisions": data = decision
+            default: data = Data()
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
+        }
+        let client = try makeClient(requestCount: 3)
+        let candidateRequest = ClaimCandidateRequestV1(
+            requestId: "request:claim-candidate-wire",
+            conversationId: "conversation:default",
+            evidenceHandles: ["grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+            instruction: "Remember the note."
+        )
+        let decisionRequest = ClaimDecisionRequestV1(
+            requestId: "request:claim-decision-wire",
+            conversationId: "conversation:default",
+            claimId: "claim:wire",
+            expectedRevision: 1,
+            decision: .confirm
+        )
+
+        _ = try await client.proposeClaims(candidateRequest)
+        _ = try await client.claimExceptions(cursor: "c1_claims")
+        _ = try await client.decideClaim(decisionRequest)
+
+        let requests = UniversalAccessMockURLProtocol.requests
+        XCTAssertEqual(requests.map { "\($0.httpMethod!) \($0.url!.path)" }, [
+            "POST /v2/universal/claim-candidates",
+            "GET /v2/universal/claim-exceptions",
+            "POST /v2/universal/claim-decisions",
+        ])
+        XCTAssertEqual(requests.map { $0.value(forHTTPHeaderField: "Content-Type") }, [
+            "application/json", nil, "application/json",
+        ])
+        XCTAssertEqual(requests[0].httpBody, try UniversalAccessJSON.encoder.encode(candidateRequest))
+        XCTAssertEqual(requests[2].httpBody, try UniversalAccessJSON.encoder.encode(decisionRequest))
+        XCTAssertEqual(URLComponents(url: requests[1].url!, resolvingAgainstBaseURL: false)?.queryItems, [
+            URLQueryItem(name: "cursor", value: "c1_claims"),
+        ])
+    }
+
     func testReachAndLodestarDecodeTheSameRecallResponse() async throws {
         respondWithFixture("recall-response.v1", status: 200)
         let request = RecallRequestV1(
