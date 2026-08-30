@@ -353,10 +353,14 @@ public final class UniversalAccessClient: @unchecked Sendable {
         )
     }
 
-    public func evidence(accessGrant: String) async throws -> EvidenceResponseV1 {
+    public func evidence(
+        accessGrant: String,
+        representation: EvidenceRepresentation = .content
+    ) async throws -> EvidenceResponseV1 {
         guard (16 ... 512).contains(accessGrant.count) else { throw UniversalAccessError.invalidRequest }
         return try await sendRead(
             path: "/v2/universal/evidence/\(try Self.pathSegment(accessGrant))",
+            queryItems: [URLQueryItem(name: "representation", value: representation.rawValue)],
             response: EvidenceResponseV1.self
         )
     }

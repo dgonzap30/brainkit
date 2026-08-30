@@ -884,6 +884,11 @@ public enum EvidenceResponseDisposition: String, Codable, Equatable, Sendable {
     case redacted
 }
 
+public enum EvidenceRepresentation: String, Codable, Equatable, Sendable {
+    case metadata
+    case content
+}
+
 public struct EvidenceResponseV1: Codable, Equatable, Sendable, UniversalAccessRootObject, UniversalAccessValidatable {
     public static let allowedRootKeys: Set<String> = ["schemaVersion", "evidence", "disposition", "mediaType", "text", "contentBase64", "redactionReason"]
     public let schemaVersion: UniversalAccessSchemaVersion
@@ -900,14 +905,25 @@ public struct EvidenceResponseV1: Codable, Equatable, Sendable, UniversalAccessR
         if let mediaType { try UniversalAccessValidation.require((1 ... 160).contains(mediaType.count), "mediaType") }
         if let text { try UniversalAccessValidation.require(text.count <= UniversalAccessLimits.maxCaptureTextCharacters, "text") }
         if let contentBase64 { _ = try UniversalAccessValidation.base64(contentBase64, maximumBytes: UniversalAccessLimits.maxAttachmentBytes, field: "contentBase64") }
+        let hasText = text != nil
+        let hasBytes = contentBase64 != nil
+        if disposition == .content {
+            try UniversalAccessValidation.require(hasText != hasBytes, "content")
+            try UniversalAccessValidation.require(redactionReason == nil, "redactionReason")
+            if hasText {
+                try UniversalAccessValidation.require(mediaType == "text/plain; charset=utf-8", "mediaType")
+            }
+            if hasBytes {
+                try UniversalAccessValidation.require(mediaType == "image/jpeg", "mediaType")
+            }
+        } else {
+            try UniversalAccessValidation.require(!hasText && !hasBytes, "content")
+        }
         if disposition == .redacted {
             guard let redactionReason else { throw UniversalAccessContractError.invalidField("redactionReason") }
             try UniversalAccessValidation.nonBlank(redactionReason, maximum: 500, field: "redactionReason")
         } else {
             try UniversalAccessValidation.require(redactionReason == nil, "redactionReason")
-        }
-        if disposition != .content {
-            try UniversalAccessValidation.require(text == nil && contentBase64 == nil, "content")
         }
     }
 }
@@ -1176,6 +1192,7 @@ public enum UniversalAccessErrorCategory: String, Codable, Equatable, Sendable {
     case bodyTooLarge = "body_too_large"
     case captureConflict = "capture_conflict"
     case claimChanged = "claim_changed"
+    case evidenceUnavailable = "evidence_unavailable"
     case forbidden
     case integrityFailed = "integrity_failed"
     case notFound = "not_found"

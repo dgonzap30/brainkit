@@ -317,6 +317,23 @@ final class UniversalAccessClientTests: XCTestCase {
         }
     }
 
+    func testEvidenceReadSendsTheExplicitRepresentationQuery() async throws {
+        let response = Data(#"{"schemaVersion":"evidence-response.v1","evidence":{"id":"evidence:contract","domain":"inbox","kind":"capture.text","classification":"private","observedAt":"2026-08-29T22:30:00.000Z","contentHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","accessGrant":"grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","grantExpiresAt":"2026-08-29T22:40:00.000Z"},"disposition":"metadata"}"#.utf8)
+        respond(status: 200, data: response)
+
+        _ = try await makeClient().evidence(
+            accessGrant: "grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            representation: .metadata
+        )
+
+        let request = try XCTUnwrap(UniversalAccessMockURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.path, "/v2/universal/evidence/grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems, [
+            URLQueryItem(name: "representation", value: "metadata"),
+        ])
+    }
+
     func testHighLevelPairingDecodesCodeCreatesKeySignsProofAndStoresOnlyAfterReceiptValidation() async throws {
         respondWithFixture("pairing-receipt.v1", status: 200)
         let store = TestDeviceIdentityStore(identity: nil)

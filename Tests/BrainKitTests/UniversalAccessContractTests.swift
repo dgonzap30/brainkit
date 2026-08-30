@@ -138,6 +138,27 @@ final class UniversalAccessContractTests: XCTestCase {
         XCTAssertThrowsError(try CanonicalJSON.data(from: JSONValue.number(Double.nan)))
     }
 
+    func testEvidenceResponseRequiresOneMediaAppropriateContentBody() throws {
+        let evidence = #"{"id":"evidence:contract","domain":"inbox","kind":"capture.text","classification":"private","observedAt":"2026-08-29T22:30:00.000Z","contentHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","accessGrant":"grant_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","grantExpiresAt":"2026-08-29T22:40:00.000Z"}"#
+        let valid = Data(#"{"schemaVersion":"evidence-response.v1","evidence":\#(evidence),"disposition":"content","mediaType":"text/plain; charset=utf-8","text":"exact text"}"#.utf8)
+        XCTAssertNoThrow(try UniversalAccessJSON.decoder.decode(EvidenceResponseV1.self, from: valid))
+
+        let missingBody = Data(#"{"schemaVersion":"evidence-response.v1","evidence":\#(evidence),"disposition":"content","mediaType":"text/plain; charset=utf-8"}"#.utf8)
+        XCTAssertThrowsError(try UniversalAccessJSON.decoder.decode(EvidenceResponseV1.self, from: missingBody))
+
+        let wrongMedia = Data(#"{"schemaVersion":"evidence-response.v1","evidence":\#(evidence),"disposition":"content","mediaType":"image/jpeg","text":"wrong"}"#.utf8)
+        XCTAssertThrowsError(try UniversalAccessJSON.decoder.decode(EvidenceResponseV1.self, from: wrongMedia))
+
+        let bothBodies = Data(#"{"schemaVersion":"evidence-response.v1","evidence":\#(evidence),"disposition":"content","mediaType":"image/jpeg","text":"wrong","contentBase64":"/9j/2Q=="}"#.utf8)
+        XCTAssertThrowsError(try UniversalAccessJSON.decoder.decode(EvidenceResponseV1.self, from: bothBodies))
+    }
+
+    func testEvidenceUnavailableErrorCategoryDecodes() throws {
+        let data = Data(#"{"schemaVersion":"universal-access-error.v1","category":"evidence_unavailable","message":"Evidence is unavailable.","retryable":false}"#.utf8)
+        let envelope = try UniversalAccessJSON.decoder.decode(UniversalAccessErrorEnvelopeV1.self, from: data)
+        XCTAssertEqual(envelope.category, .evidenceUnavailable)
+    }
+
     private func roundTrip<T: Codable & Equatable>(_ type: T.Type, fixture: String) throws {
         let value = try UniversalAccessJSON.decoder.decode(type, from: fixtureData(fixture))
         let encoded = try UniversalAccessJSON.encoder.encode(value)
