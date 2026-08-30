@@ -234,6 +234,89 @@ final class UniversalAccessClientTests: XCTestCase {
         XCTAssertNil(sent.value(forHTTPHeaderField: "X-Lodestar-Signature"))
     }
 
+    func testTask11RoutesUseExactMethodsPathsAndContentTypes() async throws {
+        let captureReceipt = try fixtureData("capture-receipt.v1")
+        let challenge = Data(#"{"schemaVersion":"pairing-challenge.v1","challengeId":"pairing-challenge:test","pairingCode":"ABCD-EFGH-IJKL-MNOP","clientClass":"reach","serverIdentity":{"serverId":"server:mini","displayName":"Lodestar Mini","origin":"https://mini.example","tlsFingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"scopeProfile":"reach","expiresAt":"2026-08-29T22:05:00.000Z"}"#.utf8)
+        let bootstrap = Data(#"{"schemaVersion":"bootstrap-response.v1","serverIdentity":{"serverId":"server:mini","displayName":"Lodestar Mini","origin":"https://mini.example","tlsFingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"deviceId":"device:test","policy":{"profile":"reach","scopes":["scope:devices.self.rotate","scope:universal.capture.write","scope:universal.claims.decide","scope:universal.claims.propose","scope:universal.claims.read","scope:universal.context.read","scope:universal.conversation.read","scope:universal.conversation.write","scope:universal.evidence.read"],"domains":["inbox","personal"],"maximumClassification":"restricted"},"defaultConversation":{"id":"conversation:default","title":"Inbox","createdAt":"2026-08-29T22:00:00.000Z","updatedAt":"2026-08-29T22:00:00.000Z"},"generatedAt":"2026-08-29T22:00:00.000Z"}"#.utf8)
+        let devices = Data(#"{"schemaVersion":"device-list-response.v1","devices":[],"generatedAt":"2026-08-29T22:00:00.000Z"}"#.utf8)
+        let rotation = Data(#"{"schemaVersion":"key-rotation-receipt.v1","requestId":"request:rotation-wire","deviceId":"device:test","keyVersion":2,"rotatedAt":"2026-08-29T22:00:00.000Z"}"#.utf8)
+        let revocation = Data(#"{"schemaVersion":"device-revocation-receipt.v1","requestId":"request:revocation-wire","deviceId":"device:reach-target","keyVersion":1,"revokedAt":"2026-08-29T22:00:00.000Z"}"#.utf8)
+        UniversalAccessMockURLProtocol.handler = { request, _ in
+            let data: Data
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/v2/devices/pairing-challenges"):
+                data = challenge
+            case ("GET", "/v2/universal/bootstrap"):
+                data = bootstrap
+            case ("POST", "/v2/universal/captures"),
+                 ("GET", "/v2/universal/captures/11111111-1111-4111-8111-111111111111/receipt"):
+                data = captureReceipt
+            case ("GET", "/v2/devices"):
+                data = devices
+            case ("POST", "/v2/devices/self/rotate"):
+                data = rotation
+            case ("POST", "/v2/devices/device:reach-target/revoke"):
+                data = revocation
+            default:
+                data = Data()
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
+        }
+        let client = try makeClient(requestCount: 7)
+        let envelope = try UniversalAccessJSON.decoder.decode(
+            CaptureEnvelopeV1.self,
+            from: fixtureData("capture-envelope.v1")
+        )
+        let upload = CaptureUploadV1(
+            envelope: envelope,
+            attachmentBodies: [
+                CaptureAttachmentBodyV1(
+                    attachmentId: envelope.attachments[0].attachmentId,
+                    contentBase64: "/9j/2Q=="
+                ),
+            ]
+        )
+
+        _ = try await client.createPairingChallenge(PairingChallengeRequestV1(clientClass: .reach))
+        _ = try await client.bootstrap()
+        _ = try await client.uploadCapture(upload)
+        _ = try await client.captureReceipt(envelopeId: envelope.envelopeId)
+        _ = try await client.devices()
+        _ = try await client.rotateSelf(KeyRotationRequestV1(
+            requestId: "request:rotation-wire",
+            expectedKeyVersion: 1,
+            newPublicKeyX963: Data(repeating: 1, count: 65).base64EncodedString(),
+            newKeyProofSignature: Data(repeating: 2, count: 64).base64EncodedString()
+        ))
+        _ = try await client.revokeDevice(
+            deviceId: "device:reach-target",
+            request: DeviceRevocationRequestV1(
+                requestId: "request:revocation-wire",
+                expectedKeyVersion: 1,
+                reason: "retired"
+            )
+        )
+
+        XCTAssertEqual(UniversalAccessMockURLProtocol.requests.map { request in
+            (request.httpMethod!, request.url!.path, request.value(forHTTPHeaderField: "Content-Type"))
+        }.map { "\($0.0) \($0.1) \($0.2 ?? "nil")" }, [
+            "POST /v2/devices/pairing-challenges application/json",
+            "GET /v2/universal/bootstrap nil",
+            "POST /v2/universal/captures application/vnd.lodestar.capture+json",
+            "GET /v2/universal/captures/11111111-1111-4111-8111-111111111111/receipt nil",
+            "GET /v2/devices nil",
+            "POST /v2/devices/self/rotate application/json",
+            "POST /v2/devices/device:reach-target/revoke application/json",
+        ])
+        for request in UniversalAccessMockURLProtocol.requests {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Lodestar-Device-Id"), "device:test")
+            for header in UniversalRequestSigner.signedHeaderNames {
+                XCTAssertNotNil(request.value(forHTTPHeaderField: header), "missing \(header)")
+            }
+        }
+    }
+
     func testHighLevelPairingDecodesCodeCreatesKeySignsProofAndStoresOnlyAfterReceiptValidation() async throws {
         respondWithFixture("pairing-receipt.v1", status: 200)
         let store = TestDeviceIdentityStore(identity: nil)
@@ -383,7 +466,7 @@ final class UniversalAccessClientTests: XCTestCase {
         XCTAssertEqual(store.identity?.signer.publicKeyX963, oldSigner.publicKeyX963)
     }
 
-    private func makeClient(originOverride: URL? = nil) throws -> UniversalAccessClient {
+    private func makeClient(originOverride: URL? = nil, requestCount: Int = 2) throws -> UniversalAccessClient {
         let identity = DeviceIdentityV1(
             metadata: DeviceIdentityMetadataV1(
                 serverOrigin: URL(string: "https://mini.example")!,
@@ -401,14 +484,12 @@ final class UniversalAccessClientTests: XCTestCase {
         return UniversalAccessClient(
             identityStore: TestDeviceIdentityStore(identity: identity),
             session: testSession(),
-            clock: SequenceClock([
-                Date(timeIntervalSince1970: 1_777_777_777.123),
-                Date(timeIntervalSince1970: 1_777_777_778.456),
-            ]),
-            nonceGenerator: SequenceNonceGenerator([
-                Data(repeating: 1, count: 16),
-                Data(repeating: 2, count: 16),
-            ]),
+            clock: SequenceClock((0 ..< max(2, requestCount)).map {
+                Date(timeIntervalSince1970: 1_777_777_777.123 + Double($0))
+            }),
+            nonceGenerator: SequenceNonceGenerator((0 ..< max(2, requestCount)).map {
+                Data(repeating: UInt8($0 + 1), count: 16)
+            }),
             originOverride: originOverride
         )
     }
