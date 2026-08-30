@@ -572,6 +572,7 @@ public final class UniversalAccessClient: @unchecked Sendable {
         let origin = try resolvedOrigin(for: identity)
         let url = try Self.makeURL(origin: origin, path: path, queryItems: queryItems)
         var lastError: UniversalAccessError = .transport
+        var signingTimeOverride: Date?
 
         for attempt in 0 ..< 2 {
             do {
@@ -579,7 +580,7 @@ public final class UniversalAccessClient: @unchecked Sendable {
                     method: method,
                     url: url,
                     body: body,
-                    timestamp: clock.now(),
+                    timestamp: signingTimeOverride ?? clock.now(),
                     requestId: requestId,
                     nonce: nonceGenerator.nonce()
                 )
@@ -609,6 +610,12 @@ public final class UniversalAccessClient: @unchecked Sendable {
                 throw Self.mapServerError(data: data, status: httpResponse.statusCode, fallbackRequestId: requestId)
             } catch let error as UniversalAccessError {
                 lastError = error
+                if case .clockSkew(_, let serverTime) = error {
+                    guard let corrected = Self.timestampDate(serverTime) else {
+                        throw UniversalAccessError.decoding
+                    }
+                    signingTimeOverride = corrected
+                }
             } catch {
                 lastError = pinningDelegate?.consumePinFailure() == true ? .tlsPinMismatch : .transport
             }
@@ -633,7 +640,8 @@ public final class UniversalAccessClient: @unchecked Sendable {
         status: Int,
         fallbackRequestId: String
     ) -> UniversalAccessError {
-        guard let envelope = try? UniversalAccessJSON.decoder.decode(UniversalAccessErrorEnvelopeV1.self, from: data) else {
+        guard let envelope = try? UniversalAccessJSON.decoder.decode(UniversalAccessErrorEnvelopeV1.self, from: data),
+              (try? envelope.validate()) != nil else {
             return .server(category: .unavailable, status: status, requestId: fallbackRequestId, retryable: status >= 500)
         }
         let requestId = envelope.requestId ?? fallbackRequestId
@@ -641,6 +649,9 @@ public final class UniversalAccessClient: @unchecked Sendable {
         case .revoked:
             return .revoked(requestId: requestId)
         case .unauthenticated:
+            if let serverTime = envelope.serverTime {
+                return .clockSkew(requestId: requestId, serverTime: serverTime)
+            }
             return .unauthenticated(requestId: requestId)
         case .rateLimited:
             return .rateLimited(requestId: requestId)
@@ -700,6 +711,13 @@ public final class UniversalAccessClient: @unchecked Sendable {
 
     private static func validateCursor(_ cursor: String?) throws {
         if let cursor, !(1 ... 2_048).contains(cursor.count) { throw UniversalAccessError.invalidRequest }
+    }
+
+    private static func timestampDate(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        return formatter.date(from: value)
     }
 
     private static func readRequestID() -> String {

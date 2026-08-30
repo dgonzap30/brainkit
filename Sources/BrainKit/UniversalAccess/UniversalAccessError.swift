@@ -10,6 +10,7 @@ public enum UniversalAccessError: Error, Equatable, Sendable {
     case tlsPinMismatch
     case transport
     case decoding
+    case clockSkew(requestId: String?, serverTime: String)
     case revoked(requestId: String?)
     case unauthenticated(requestId: String?)
     case rateLimited(requestId: String?)
@@ -22,7 +23,7 @@ public enum UniversalAccessError: Error, Equatable, Sendable {
 
     public var isRetryable: Bool {
         switch self {
-        case .transport, .rateLimited:
+        case .transport, .rateLimited, .clockSkew:
             return true
         case .server(_, _, _, let retryable):
             return retryable
@@ -53,6 +54,8 @@ extension UniversalAccessError: LocalizedError {
             return "The paired server could not be reached."
         case .decoding:
             return "The server response is invalid."
+        case .clockSkew:
+            return "The device clock is outside the paired server's signing window."
         case .revoked:
             return "This device has been revoked. Pair it again to continue."
         case .unauthenticated:

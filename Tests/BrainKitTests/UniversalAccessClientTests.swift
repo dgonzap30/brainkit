@@ -144,6 +144,53 @@ final class UniversalAccessClientTests: XCTestCase {
         XCTAssertNotEqual(first.value(forHTTPHeaderField: "X-Lodestar-Signature"), second.value(forHTTPHeaderField: "X-Lodestar-Signature"))
     }
 
+    func testClockSkewGuidanceResignsSameMutationAgainstAuthenticatedServerTime() async throws {
+        let serverTime = "2026-05-03T03:09:40.000Z"
+        let skewBody = #"{"schemaVersion":"universal-access-error.v1","requestId":"request:recall-0001","category":"unauthenticated","message":"clock outside window","retryable":false,"serverTime":"\#(serverTime)"}"#
+        let success = try fixtureData("recall-response.v1")
+        UniversalAccessMockURLProtocol.handler = { request, index in
+            let status = index == 0 ? 401 : 200
+            let data = index == 0 ? Data(skewBody.utf8) : success
+            return (HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, data)
+        }
+        let request = RecallRequestV1(
+            requestId: "request:recall-0001",
+            conversationId: "conversation:default",
+            query: "blue notebook",
+            limit: 10
+        )
+
+        _ = try await makeClient().recall(request)
+
+        XCTAssertEqual(UniversalAccessMockURLProtocol.requests.count, 2)
+        let first = UniversalAccessMockURLProtocol.requests[0]
+        let second = UniversalAccessMockURLProtocol.requests[1]
+        XCTAssertEqual(first.httpBody, second.httpBody)
+        XCTAssertEqual(
+            first.value(forHTTPHeaderField: "X-Lodestar-Request-Id"),
+            second.value(forHTTPHeaderField: "X-Lodestar-Request-Id")
+        )
+        XCTAssertEqual(second.value(forHTTPHeaderField: "X-Lodestar-Timestamp"), serverTime)
+        XCTAssertNotEqual(first.value(forHTTPHeaderField: "X-Lodestar-Nonce"), second.value(forHTTPHeaderField: "X-Lodestar-Nonce"))
+        XCTAssertNotEqual(first.value(forHTTPHeaderField: "X-Lodestar-Signature"), second.value(forHTTPHeaderField: "X-Lodestar-Signature"))
+    }
+
+    func testUnauthenticatedWithoutServerTimeDoesNotRetry() async throws {
+        let body = #"{"schemaVersion":"universal-access-error.v1","requestId":"request:recall-0001","category":"unauthenticated","message":"bad signature","retryable":false}"#
+        respond(status: 401, data: Data(body.utf8))
+        let request = RecallRequestV1(
+            requestId: "request:recall-0001",
+            conversationId: "conversation:default",
+            query: "blue notebook",
+            limit: 10
+        )
+
+        await XCTAssertThrowsErrorAsync(try await makeClient().recall(request)) { error in
+            XCTAssertEqual(error as? UniversalAccessError, .unauthenticated(requestId: request.requestId))
+        }
+        XCTAssertEqual(UniversalAccessMockURLProtocol.requests.count, 1)
+    }
+
     func testRevokedResponseMapsWithoutLeakingServerBodyMessage() async throws {
         let canary = "capture text /Users/diego/private signature=secret"
         let body = #"{"schemaVersion":"universal-access-error.v1","requestId":"request:recall-0001","category":"revoked","message":"\#(canary)","retryable":false}"#
