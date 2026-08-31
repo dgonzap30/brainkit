@@ -33,7 +33,7 @@ public struct StatusPill: View {
                 .frame(width: 7, height: 7)
             Text(label)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LodestarColor.textSecondary)
                 .lineLimit(1)
         }
         .padding(.horizontal, LodestarMetrics.spacingS + 2)

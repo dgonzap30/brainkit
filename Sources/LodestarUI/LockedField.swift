@@ -64,25 +64,28 @@ public struct LockedField: View {
             case .locked:
                 HStack(spacing: LodestarMetrics.spacingS) {
                     Text(label)
+                        .foregroundStyle(LodestarColor.textPrimary)
                     Spacer()
                     Text(displayValue)
                         .font(LodestarType.mono(.footnote))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LodestarColor.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Image(systemName: "lock.fill")
                         .font(.footnote)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(LodestarColor.textTertiary)
                     Button("Edit") { confirmingOverride = true }
                         .font(.footnote)
+                        .foregroundStyle(LodestarColor.accent)
                 }
                 Text(provenance)
                     .font(.footnote)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(LodestarColor.textTertiary)
             case .overridden:
                 editor
                 Button("Reset to provisioned", action: onReset)
                     .font(.footnote)
+                    .foregroundStyle(LodestarColor.accent)
             case .editable:
                 editor
             }
@@ -105,6 +108,7 @@ public struct LockedField: View {
     @ViewBuilder private var editor: some View {
         HStack(spacing: LodestarMetrics.spacingS) {
             Text(label)
+                .foregroundStyle(LodestarColor.textPrimary)
             Spacer()
             Group {
                 if secure {
@@ -116,6 +120,7 @@ public struct LockedField: View {
             }
             .multilineTextAlignment(.trailing)
             .font(LodestarType.mono(.footnote))
+            .foregroundStyle(LodestarColor.textSecondary)
         }
     }
 }

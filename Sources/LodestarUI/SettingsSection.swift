@@ -19,9 +19,17 @@ public struct SettingsSection<Content: View>: View {
             content
                 .listRowBackground(LodestarColor.surface)
         } header: {
-            if let title { Text(title) }
+            if let title {
+                Text(title)
+                    .font(LodestarType.caption)
+                    .foregroundStyle(LodestarColor.textSecondary)
+            }
         } footer: {
-            if let footer { Text(footer).font(.footnote) }
+            if let footer {
+                Text(footer)
+                    .font(LodestarType.secondary)
+                    .foregroundStyle(LodestarColor.textTertiary)
+            }
         }
     }
 }

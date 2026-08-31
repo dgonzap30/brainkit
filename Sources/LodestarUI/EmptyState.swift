@@ -16,12 +16,13 @@ public struct EmptyState: View {
         VStack(spacing: LodestarMetrics.spacingM) {
             Image(systemName: icon)
                 .font(.largeTitle)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(LodestarColor.textTertiary)
             Text(title)
-                .font(.headline)
+                .font(LodestarType.sectionTitle)
+                .foregroundStyle(LodestarColor.textPrimary)
             Text(hint)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(LodestarType.secondary)
+                .foregroundStyle(LodestarColor.textSecondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
