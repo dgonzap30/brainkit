@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${LODESTAR_REAL_RG:?}"
+
+for argument in "$@"; do
+  case "$argument" in
+    *URLSession*) exit 2 ;;
+  esac
+done
+
+exec "$LODESTAR_REAL_RG" "$@"
