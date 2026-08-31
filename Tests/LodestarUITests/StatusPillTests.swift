@@ -21,4 +21,11 @@ final class StatusPillTests: XCTestCase {
         XCTAssertEqual(v.r, v.g, accuracy: 0.001)
         XCTAssertEqual(v.g, v.b, accuracy: 0.001)
     }
+
+    func testLegacyKindsMapToPresentationTones() {
+        XCTAssertEqual(StatusPillKind.ok.presentationTone, .success)
+        XCTAssertEqual(StatusPillKind.warn.presentationTone, .warning)
+        XCTAssertEqual(StatusPillKind.error.presentationTone, .danger)
+        XCTAssertEqual(StatusPillKind.stale.presentationTone, .neutral)
+    }
 }
