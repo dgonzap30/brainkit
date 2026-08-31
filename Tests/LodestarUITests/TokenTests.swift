@@ -1,43 +1,35 @@
-import XCTest
 import SwiftUI
+import XCTest
 @testable import LodestarUI
 
-/// U1 §tokens — the OLED ramp and status hues are the suite-wide contract
-/// (canonical values standardized in the icon suite / LedgerColorTokens).
 final class TokenTests: XCTestCase {
-    private func rgba(_ c: Color) -> (r: Double, g: Double, b: Double) {
-        let resolved = c.resolve(in: EnvironmentValues())
-        return (Double(resolved.red), Double(resolved.green), Double(resolved.blue))
+    private func assertHex(_ color: Color, _ hex: UInt32, file: StaticString = #filePath, line: UInt = #line) {
+        let resolved = color.resolve(in: EnvironmentValues())
+
+        XCTAssertEqual(Int((Double(resolved.red) * 255).rounded()), Int((hex >> 16) & 0xFF), file: file, line: line)
+        XCTAssertEqual(Int((Double(resolved.green) * 255).rounded()), Int((hex >> 8) & 0xFF), file: file, line: line)
+        XCTAssertEqual(Int((Double(resolved.blue) * 255).rounded()), Int(hex & 0xFF), file: file, line: line)
     }
 
-    func testSurfaceRampIsPureBlackBased() {
-        XCTAssertEqual(rgba(LodestarColor.bg).r, 0, accuracy: 0.001)
-        XCTAssertEqual(rgba(LodestarColor.surface).r, 0.075, accuracy: 0.005)
-        XCTAssertEqual(rgba(LodestarColor.elevated).r, 0.12, accuracy: 0.005)
-        XCTAssertEqual(rgba(LodestarColor.border).r, 0.16, accuracy: 0.005)
-        // monochrome: r == g == b on every surface token
-        for token in [LodestarColor.surface, LodestarColor.elevated, LodestarColor.border] {
-            let v = rgba(token)
-            XCTAssertEqual(v.r, v.g, accuracy: 0.001)
-            XCTAssertEqual(v.g, v.b, accuracy: 0.001)
-        }
+    func testTemperDerivedPaletteIsExact() {
+        assertHex(LodestarColor.background, 0x000000)
+        assertHex(LodestarColor.surface, 0x0D0D0E)
+        assertHex(LodestarColor.surfaceRaised, 0x161617)
+        assertHex(LodestarColor.border, 0x232324)
+        assertHex(LodestarColor.textPrimary, 0xFAFAFA)
+        assertHex(LodestarColor.textSecondary, 0xA1A1AA)
+        assertHex(LodestarColor.textTertiary, 0x82828C)
+        assertHex(LodestarColor.textMuted, 0x3F3F46)
+        assertHex(LodestarColor.accent, 0xA78BFA)
+        assertHex(LodestarColor.success, 0x38CF82)
+        assertHex(LodestarColor.warning, 0xFF9F0A)
+        assertHex(LodestarColor.danger, 0xEF4444)
     }
 
-    func testStatusHuesMatchSuitePalette() {
-        // #22C55E / #F59E0B / #EF4444
-        XCTAssertEqual(rgba(LodestarColor.statusOK).g, Double(0xC5) / 255, accuracy: 0.005)
-        XCTAssertEqual(rgba(LodestarColor.statusWarn).r, Double(0xF5) / 255, accuracy: 0.005)
-        XCTAssertEqual(rgba(LodestarColor.statusError).r, Double(0xEF) / 255, accuracy: 0.005)
-    }
-
-    func testMetricsScale() {
-        XCTAssertEqual(LodestarMetrics.spacingXS, 4)
-        XCTAssertEqual(LodestarMetrics.spacingS, 8)
-        XCTAssertEqual(LodestarMetrics.spacingM, 12)
-        XCTAssertEqual(LodestarMetrics.spacingL, 16)
-        XCTAssertEqual(LodestarMetrics.spacingXL, 24)
-        XCTAssertEqual(LodestarMetrics.radiusCard, 8)
-        XCTAssertEqual(LodestarMetrics.radiusSheet, 12)
-        XCTAssertEqual(LodestarMetrics.cardInset, 12)
+    func testFamilyMetricsAreExact() {
+        XCTAssertEqual(LodestarMetrics.cardInset, 14)
+        XCTAssertEqual(LodestarMetrics.radiusCard, 10)
+        XCTAssertEqual(LodestarMetrics.radiusSheet, 16)
+        XCTAssertEqual(LodestarMetrics.primaryControlHeight, 44)
     }
 }
