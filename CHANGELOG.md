@@ -2,6 +2,22 @@
 
 All notable changes to BrainKit are documented here. Versioning follows [SemVer](https://semver.org); contract schema versions (`capture.v1`, `temper.v1`, …) evolve additively and are documented per release.
 
+## [0.6.0] — Unreleased
+
+### Changed
+
+- **LodestarUI family foundation** — revised the shared palette, geometry, typography, and motion roles to the Temper-derived Lodestar family language while keeping the package presentation-only.
+
+### Added
+
+- **Generic SwiftUI primitives** — additive card, header, settings, empty-state, status, and press-presentation variants that remain domain- and navigation-agnostic.
+
+### Migration
+
+- **Consumer migration required** — each app must move its presentation adapters onto the 0.6.0 roles and primitives, while retaining its own domain state, workflows, navigation, and authority boundaries.
+
+No breaking changes.
+
 ## [0.5.0] — 2026-07-20
 
 ### Added
