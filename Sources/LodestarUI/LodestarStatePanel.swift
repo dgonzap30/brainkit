@@ -39,28 +39,85 @@ public enum LodestarStatePanelLayout: Sendable, Equatable {
 public struct LodestarStatePanel: View {
     public let icon: String
     public let title: String
-    public let detail: String?
+    public let detail: String
     public let tone: LodestarPresentationTone
     public let layout: LodestarStatePanelLayout
     public let actionLabel: String?
     public let action: (() -> Void)?
+    private let optionalDetail: String?
 
     public init(
         icon: String,
         title: String,
-        detail: String? = nil,
+        detail: String,
         tone: LodestarPresentationTone = .neutral,
-        layout: LodestarStatePanelLayout = .card,
         actionLabel: String? = nil,
         action: (() -> Void)? = nil
     ) {
         self.icon = icon
         self.title = title
         self.detail = detail
+        self.optionalDetail = detail
         self.tone = tone
-        self.layout = layout
+        self.layout = .card
         self.actionLabel = actionLabel
         self.action = action
+    }
+
+    public static func compact(
+        icon: String,
+        title: String,
+        detail: String? = nil,
+        tone: LodestarPresentationTone = .neutral
+    ) -> LodestarStatePanel {
+        LodestarStatePanel(
+            icon: icon,
+            title: title,
+            optionalDetail: detail,
+            tone: tone,
+            layout: .compact
+        )
+    }
+
+    public static func hero(
+        icon: String,
+        title: String,
+        detail: String? = nil,
+        tone: LodestarPresentationTone = .neutral
+    ) -> LodestarStatePanel {
+        LodestarStatePanel(
+            icon: icon,
+            title: title,
+            optionalDetail: detail,
+            tone: tone,
+            layout: .hero
+        )
+    }
+
+    private init(
+        icon: String,
+        title: String,
+        optionalDetail: String?,
+        tone: LodestarPresentationTone,
+        layout: LodestarStatePanelLayout
+    ) {
+        self.icon = icon
+        self.title = title
+        self.detail = optionalDetail ?? ""
+        self.optionalDetail = optionalDetail
+        self.tone = tone
+        self.layout = layout
+        self.actionLabel = nil
+        self.action = nil
+    }
+
+    public var iconForegroundColor: Color {
+        switch layout {
+        case .card:
+            tone.foregroundColor
+        case .compact, .hero:
+            tone.colorRole == .neutral ? LodestarColor.textTertiary : tone.foregroundColor
+        }
     }
 
     @ViewBuilder
@@ -81,14 +138,14 @@ public struct LodestarStatePanel: View {
                 HStack(alignment: .top, spacing: LodestarMetrics.spacingM) {
                     Image(systemName: icon)
                         .font(.title3.weight(.semibold))
-                        .foregroundStyle(tone.foregroundColor)
+                        .foregroundStyle(iconForegroundColor)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: LodestarMetrics.spacingXS) {
                         Text(title)
                             .font(LodestarType.bodyEmphasis)
                             .foregroundStyle(LodestarColor.textPrimary)
-                        if let detail {
-                            Text(detail)
+                        if let optionalDetail {
+                            Text(optionalDetail)
                                 .font(LodestarType.secondary)
                                 .foregroundStyle(LodestarColor.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -109,14 +166,14 @@ public struct LodestarStatePanel: View {
         HStack(spacing: layout.contentSpacing) {
             Image(systemName: icon)
                 .font(.system(size: layout.iconSize, weight: .medium))
-                .foregroundStyle(compactForegroundColor)
+                .foregroundStyle(iconForegroundColor)
             VStack(alignment: .leading, spacing: LodestarMetrics.spacingXS) {
                 Text(title)
                     .font(LodestarType.caption)
                     .foregroundStyle(LodestarColor.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
-                if let detail {
-                    Text(detail)
+                if let optionalDetail {
+                    Text(optionalDetail)
                         .font(LodestarType.caption)
                         .foregroundStyle(LodestarColor.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -133,15 +190,15 @@ public struct LodestarStatePanel: View {
         VStack(spacing: layout.contentSpacing) {
             Image(systemName: icon)
                 .font(.system(size: layout.iconSize, weight: .medium))
-                .foregroundStyle(LodestarColor.textTertiary)
+                .foregroundStyle(iconForegroundColor)
 
             VStack(spacing: LodestarMetrics.spacingXS) {
                 Text(title)
                     .font(LodestarType.secondary)
                     .foregroundStyle(LodestarColor.textSecondary)
                     .multilineTextAlignment(.center)
-                if let detail {
-                    Text(detail)
+                if let optionalDetail {
+                    Text(optionalDetail)
                         .font(LodestarType.small)
                         .foregroundStyle(LodestarColor.textTertiary)
                         .multilineTextAlignment(.center)
@@ -151,9 +208,6 @@ public struct LodestarStatePanel: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var compactForegroundColor: Color {
-        tone.colorRole == .neutral ? LodestarColor.textTertiary : tone.foregroundColor
-    }
 }
 
 private extension LodestarPresentationTone {

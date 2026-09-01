@@ -11,6 +11,16 @@ final class TokenTests: XCTestCase {
         XCTAssertEqual(Int((Double(resolved.blue) * 255).rounded()), Int(hex & 0xFF), file: file, line: line)
     }
 
+    private func assertOpacity(
+        _ color: Color,
+        _ opacity: Double,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let resolved = color.resolve(in: EnvironmentValues())
+        XCTAssertEqual(Double(resolved.opacity), opacity, accuracy: 0.001, file: file, line: line)
+    }
+
     func testTemperDerivedPaletteIsExact() {
         assertHex(LodestarColor.background, 0x000000)
         assertHex(LodestarColor.surface, 0x0D0D0E)
@@ -24,6 +34,12 @@ final class TokenTests: XCTestCase {
         assertHex(LodestarColor.success, 0x38CF82)
         assertHex(LodestarColor.warning, 0xFF9F0A)
         assertHex(LodestarColor.danger, 0xEF4444)
+    }
+
+    func testElevatedSurfaceAndHairlineMatchTheReferenceRoles() {
+        assertHex(LodestarColor.surfaceElevated, 0x0F0F10)
+        assertHex(LodestarColor.hairline, 0xFFFFFF)
+        assertOpacity(LodestarColor.hairline, 0.052)
     }
 
     func testFamilyMetricsAreExact() {

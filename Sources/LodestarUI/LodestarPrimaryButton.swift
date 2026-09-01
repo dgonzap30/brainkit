@@ -15,6 +15,9 @@ public enum LodestarPrimaryButtonLayout: Sendable, Equatable {
     public var horizontalPadding: CGFloat { self == .compactCapsule ? 18 : 0 }
     public var verticalPadding: CGFloat { self == .compactCapsule ? 8 : 0 }
     public var fontSize: CGFloat { self == .compactCapsule ? 13 : 15 }
+    public var semanticTextStyle: Font.TextStyle {
+        self == .compactCapsule ? .footnote : .subheadline
+    }
 }
 
 public struct LodestarPrimaryButton: View {
@@ -51,10 +54,10 @@ public struct LodestarPrimaryButton: View {
     private var standardButton: some View {
         Button(action: action) {
             label
-            .font(LodestarType.bodyEmphasis)
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: LodestarPrimaryActionPolicy.height)
-            .contentShape(.rect)
+                .font(LodestarType.bodyEmphasis)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: LodestarPrimaryActionPolicy.height)
+                .contentShape(.rect)
         }
         .buttonStyle(LodestarPrimaryButtonStyle())
         .disabled(isDisabled)
@@ -65,7 +68,7 @@ public struct LodestarPrimaryButton: View {
     private var compactButton: some View {
         Button(action: action) {
             label
-                .font(.system(size: layout.fontSize, weight: .semibold))
+                .font(.system(layout.semanticTextStyle, weight: .semibold))
                 .foregroundStyle(Color.black)
                 .padding(.horizontal, layout.horizontalPadding)
                 .padding(.vertical, layout.verticalPadding)

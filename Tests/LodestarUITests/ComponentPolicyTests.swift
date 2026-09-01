@@ -22,47 +22,64 @@ final class ComponentPolicyTests: XCTestCase {
     }
 
     func testCompactStatePanelIsUnframedAndAllowsNoDetail() {
-        let panel = LodestarStatePanel(
+        let panel = LodestarStatePanel.compact(
             icon: "chart.line.uptrend.xyaxis",
-            title: "No trend yet",
-            layout: .compact
+            title: "No trend yet"
         )
+        let detail: String = panel.detail
 
-        XCTAssertNil(panel.detail)
+        XCTAssertEqual(detail, "")
         XCTAssertEqual(panel.layout, .compact)
         XCTAssertFalse(panel.layout.isFramed)
         XCTAssertEqual(panel.layout.contentAlignment, .leading)
         XCTAssertEqual(panel.layout.iconSize, 16)
         XCTAssertEqual(panel.layout.contentSpacing, 10)
         XCTAssertEqual(panel.layout.verticalPadding, 16)
+        XCTAssertNil(panel.actionLabel)
+        XCTAssertNil(panel.action)
     }
 
-    func testHeroStatePanelIsCenteredAndUnframed() {
-        let panel = LodestarStatePanel(
+    func testHeroStatePanelIsCenteredUnframedAndUsesItsTone() {
+        let panel = LodestarStatePanel.hero(
             icon: "camera",
             title: "No photos yet",
-            layout: .hero
+            detail: nil,
+            tone: .danger
         )
+        let detail: String = panel.detail
 
-        XCTAssertNil(panel.detail)
+        XCTAssertEqual(detail, "")
         XCTAssertEqual(panel.layout, .hero)
         XCTAssertFalse(panel.layout.isFramed)
         XCTAssertEqual(panel.layout.contentAlignment, .centered)
         XCTAssertEqual(panel.layout.iconSize, 28)
         XCTAssertEqual(panel.layout.contentSpacing, 12)
         XCTAssertEqual(panel.layout.verticalPadding, 0)
+        XCTAssertNil(panel.actionLabel)
+        XCTAssertNil(panel.action)
+        assertHex(panel.iconForegroundColor, 0xEF4444)
+
+        let neutral = LodestarStatePanel.hero(icon: "camera", title: "No photos yet")
+        assertHex(neutral.iconForegroundColor, 0x82828C)
     }
 
-    func testExistingStatePanelCallsKeepTheFramedDefault() {
+    func testExistingStatePanelInitializerKeepsStringDetailAndCardActionBehavior() {
+        var actionInvoked = false
         let panel = LodestarStatePanel(
             icon: "checkmark",
             title: "Ready",
-            detail: "Everything is available"
+            detail: "Everything is available",
+            actionLabel: "Retry",
+            action: { actionInvoked = true }
         )
+        let detail: String = panel.detail
 
-        XCTAssertEqual(panel.detail, "Everything is available")
+        XCTAssertEqual(detail, "Everything is available")
         XCTAssertEqual(panel.layout, .card)
         XCTAssertTrue(panel.layout.isFramed)
+        XCTAssertEqual(panel.actionLabel, "Retry")
+        panel.action?()
+        XCTAssertTrue(actionInvoked)
     }
 
     func testCompactPrimaryActionUsesTheReferenceCapsuleGeometry() {
@@ -74,6 +91,7 @@ final class ComponentPolicyTests: XCTestCase {
         XCTAssertEqual(button.layout.horizontalPadding, 18)
         XCTAssertEqual(button.layout.verticalPadding, 8)
         XCTAssertEqual(button.layout.fontSize, 13)
+        XCTAssertEqual(button.layout.semanticTextStyle, .footnote)
     }
 
     func testExistingPrimaryButtonCallsKeepTheFullWidthDefault() {
@@ -122,5 +140,33 @@ final class ComponentPolicyTests: XCTestCase {
         XCTAssertEqual(LodestarPressFeedbackPolicy.opacity(isPressed: true), 0.9)
         XCTAssertNotNil(LodestarPressFeedbackPolicy.animation(reduceMotion: false))
         XCTAssertNil(LodestarPressFeedbackPolicy.animation(reduceMotion: true))
+    }
+
+    private func assertHex(
+        _ color: Color,
+        _ hex: UInt32,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let resolved = color.resolve(in: EnvironmentValues())
+
+        XCTAssertEqual(
+            Int((Double(resolved.red) * 255).rounded()),
+            Int((hex >> 16) & 0xFF),
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(
+            Int((Double(resolved.green) * 255).rounded()),
+            Int((hex >> 8) & 0xFF),
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(
+            Int((Double(resolved.blue) * 255).rounded()),
+            Int(hex & 0xFF),
+            file: file,
+            line: line
+        )
     }
 }
