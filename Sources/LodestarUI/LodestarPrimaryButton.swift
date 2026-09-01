@@ -6,32 +6,51 @@ public enum LodestarPrimaryActionPolicy {
     public static let fillRole: LodestarColorRole = .primary
 }
 
+public enum LodestarPrimaryButtonLayout: Sendable, Equatable {
+    case standard
+    case compactCapsule
+
+    public var isFullWidth: Bool { self == .standard }
+    public var usesCapsule: Bool { self == .compactCapsule }
+    public var horizontalPadding: CGFloat { self == .compactCapsule ? 18 : 0 }
+    public var verticalPadding: CGFloat { self == .compactCapsule ? 8 : 0 }
+    public var fontSize: CGFloat { self == .compactCapsule ? 13 : 15 }
+}
+
 public struct LodestarPrimaryButton: View {
     public let title: String
     public let systemImage: String?
     public let isDisabled: Bool
+    public let layout: LodestarPrimaryButtonLayout
     public let action: () -> Void
 
     public init(
         _ title: String,
         systemImage: String? = nil,
         isDisabled: Bool = false,
+        layout: LodestarPrimaryButtonLayout = .standard,
         action: @escaping () -> Void
     ) {
         self.title = title
         self.systemImage = systemImage
         self.isDisabled = isDisabled
+        self.layout = layout
         self.action = action
     }
 
+    @ViewBuilder
     public var body: some View {
+        switch layout {
+        case .standard:
+            standardButton
+        case .compactCapsule:
+            compactButton
+        }
+    }
+
+    private var standardButton: some View {
         Button(action: action) {
-            HStack(spacing: LodestarMetrics.spacingS) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                }
-                Text(title)
-            }
+            label
             .font(LodestarType.bodyEmphasis)
             .frame(maxWidth: .infinity)
             .frame(minHeight: LodestarPrimaryActionPolicy.height)
@@ -41,6 +60,31 @@ public struct LodestarPrimaryButton: View {
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.5 : 1)
         .accessibilityLabel(Text(title))
+    }
+
+    private var compactButton: some View {
+        Button(action: action) {
+            label
+                .font(.system(size: layout.fontSize, weight: .semibold))
+                .foregroundStyle(Color.black)
+                .padding(.horizontal, layout.horizontalPadding)
+                .padding(.vertical, layout.verticalPadding)
+                .background(LodestarColor.textPrimary)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(LodestarPressableButtonStyle())
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.5 : 1)
+        .accessibilityLabel(Text(title))
+    }
+
+    private var label: some View {
+        HStack(spacing: LodestarMetrics.spacingS) {
+            if let systemImage {
+                Image(systemName: systemImage)
+            }
+            Text(title)
+        }
     }
 }
 
