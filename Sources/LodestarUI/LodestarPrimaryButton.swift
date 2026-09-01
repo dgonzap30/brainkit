@@ -72,6 +72,8 @@ public struct LodestarPrimaryButton: View {
                 .foregroundStyle(Color.black)
                 .padding(.horizontal, layout.horizontalPadding)
                 .padding(.vertical, layout.verticalPadding)
+                .frame(minHeight: LodestarPrimaryActionPolicy.height)
+                .contentShape(.rect)
                 .background(LodestarColor.textPrimary)
                 .clipShape(Capsule())
         }

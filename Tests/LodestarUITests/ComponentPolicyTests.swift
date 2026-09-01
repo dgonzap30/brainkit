@@ -3,6 +3,20 @@ import XCTest
 @testable import LodestarUI
 
 final class ComponentPolicyTests: XCTestCase {
+    private var packageRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func source(_ relativePath: String) throws -> String {
+        try String(
+            contentsOf: packageRoot.appendingPathComponent(relativePath),
+            encoding: .utf8
+        )
+    }
+
     func testPrimaryActionPolicyIsWhiteAndFortyFourPoints() {
         XCTAssertEqual(LodestarPrimaryActionPolicy.height, 44)
         XCTAssertEqual(LodestarPrimaryActionPolicy.radius, 10)
@@ -92,6 +106,48 @@ final class ComponentPolicyTests: XCTestCase {
         XCTAssertEqual(button.layout.verticalPadding, 8)
         XCTAssertEqual(button.layout.fontSize, 13)
         XCTAssertEqual(button.layout.semanticTextStyle, .footnote)
+    }
+
+    func testCompactPrimaryActionOwnsItsHitAreaInsideTheButtonLabel() throws {
+        let source = try source("Sources/LodestarUI/LodestarPrimaryButton.swift")
+        let compactStart = try XCTUnwrap(
+            source.range(of: "private var compactButton: some View {")
+        )
+        let labelStart = try XCTUnwrap(
+            source.range(
+                of: "private var label: some View {",
+                range: compactStart.upperBound ..< source.endIndex
+            )
+        )
+        let compactButton = String(source[compactStart.lowerBound ..< labelStart.lowerBound])
+        let buttonStart = try XCTUnwrap(compactButton.range(of: "Button(action: action) {"))
+        let buttonStyleStart = try XCTUnwrap(
+            compactButton.range(
+                of: "\n        }\n        .buttonStyle(",
+                range: buttonStart.upperBound ..< compactButton.endIndex
+            )
+        )
+        let buttonLabel = String(
+            compactButton[buttonStart.upperBound ..< buttonStyleStart.lowerBound]
+        )
+        let frame = buttonLabel.range(
+            of: ".frame(minHeight: LodestarPrimaryActionPolicy.height)"
+        )
+        let contentShape = buttonLabel.range(of: ".contentShape(.rect)")
+
+        XCTAssertNotNil(frame)
+        XCTAssertNotNil(contentShape)
+
+        guard
+            let frame,
+            let contentShape,
+            let background = buttonLabel.range(of: ".background(LodestarColor.textPrimary)"),
+            let clip = buttonLabel.range(of: ".clipShape(Capsule())")
+        else { return }
+
+        XCTAssertLessThan(frame.lowerBound, background.lowerBound)
+        XCTAssertLessThan(contentShape.lowerBound, background.lowerBound)
+        XCTAssertLessThan(contentShape.lowerBound, clip.lowerBound)
     }
 
     func testExistingPrimaryButtonCallsKeepTheFullWidthDefault() {
