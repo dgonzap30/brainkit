@@ -7,10 +7,25 @@ final class AgentInboxClientTests: XCTestCase {
         MockURLProtocol.lastRequest = nil
     }
 
-    func testApprovalSendsScopedReviewCapabilityButDismissalDoesNot() async throws {
+    // MARK: Review capability on the wire
+    //
+    // The brain 403s ANY decision on an exec candidate that arrives without Review authority
+    // (`brain/src/core/http.ts`, `(decision === "approved" || isExec) && !hasReviewAuthority`).
+    // Exec-ness is server-side state the client cannot see, so the header has to ride every
+    // decision — gating it on `decision == "approved"` 403s every dismiss/steer of an exec item.
+
+    private func makeClient(reviewCapability: String?) -> BrainClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
-        let session = URLSession(configuration: config)
+        return BrainClient(
+            baseURL: URL(string: "http://mini:4317")!,
+            token: "front-door",
+            reviewCapability: reviewCapability,
+            session: URLSession(configuration: config)
+        )
+    }
+
+    private func respondOK() {
         MockURLProtocol.handler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -20,34 +35,78 @@ final class AgentInboxClientTests: XCTestCase {
             )!
             return (response, Data(#"{"ok":true}"#.utf8))
         }
-        let client = BrainClient(
-            baseURL: URL(string: "http://mini:4317")!,
-            token: "front-door",
-            reviewCapability: "review-only",
-            session: session
-        )
+    }
 
-        _ = try await client.decideAgentInboxItem(
-            id: "candidate",
-            decision: "approved",
-            actor: "forged"
-        )
-        XCTAssertEqual(
-            MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Lodestar-Review-Capability"),
-            "review-only"
-        )
-        XCTAssertEqual(
-            MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"),
-            "Bearer front-door"
-        )
+    func testEveryDecisionSendsScopedReviewCapabilityAlongsideFrontDoorBearer() async throws {
+        respondOK()
+        let client = makeClient(reviewCapability: "review-only")
 
-        _ = try await client.decideAgentInboxItem(
+        for decision in ["approved", "dismissed", "steered"] {
+            _ = try await client.decideAgentInboxItem(
+                id: "candidate",
+                decision: decision,
+                actor: "forged"
+            )
+            XCTAssertEqual(
+                MockURLProtocol.lastRequest?.url?.path,
+                "/core/agent/inbox/decide",
+                "decision \(decision)"
+            )
+            XCTAssertEqual(
+                MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Lodestar-Review-Capability"),
+                "review-only",
+                "decision \(decision) must carry Review authority — the gate keys off the item's exec-ness"
+            )
+            // The capability is ADDITIONAL to the front-door bearer, never a replacement.
+            XCTAssertEqual(
+                MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"),
+                "Bearer front-door",
+                "decision \(decision)"
+            )
+        }
+    }
+
+    func testDecideOmitsReviewCapabilityWhenUnset() async throws {
+        respondOK()
+        _ = try await makeClient(reviewCapability: nil).decideAgentInboxItem(
             id: "candidate",
             decision: "dismissed",
             actor: "forged"
         )
         XCTAssertNil(
             MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Lodestar-Review-Capability")
+        )
+    }
+
+    /// An empty/whitespace Keychain string behaves like "unset" — never an empty header the brain
+    /// would have to reject as malformed.
+    func testDecideTreatsBlankReviewCapabilityAsUnset() async throws {
+        respondOK()
+        _ = try await makeClient(reviewCapability: " \n ").decideAgentInboxItem(
+            id: "candidate",
+            decision: "approved",
+            actor: "forged"
+        )
+        XCTAssertNil(
+            MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Lodestar-Review-Capability")
+        )
+    }
+
+    /// /execute has no Review gate server-side — the capability must not be sprayed at routes that
+    /// do not check it.
+    func testExecuteDoesNotSendReviewCapability() async throws {
+        respondOK()
+        _ = try await makeClient(reviewCapability: "review-only").executeAgentInboxItem(
+            id: "candidate",
+            actor: "diego"
+        )
+        XCTAssertEqual(MockURLProtocol.lastRequest?.url?.path, "/core/agent/inbox/execute")
+        XCTAssertNil(
+            MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "X-Lodestar-Review-Capability")
+        )
+        XCTAssertEqual(
+            MockURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization"),
+            "Bearer front-door"
         )
     }
 

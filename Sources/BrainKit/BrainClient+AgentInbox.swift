@@ -110,13 +110,22 @@ public extension BrainClient {
     }
 
     /// POST /core/agent/inbox/decide — dry-run approval/dismissal (never executes).
+    ///
+    /// The Review capability rides EVERY decision, not just `approved`. The brain's gate is
+    /// `(decision === "approved" || isExec) && !hasReviewAuthority -> 403`
+    /// (`brain/src/core/http.ts`, /core/agent/inbox/decide): on an exec candidate it keys off the
+    /// ITEM's exec-ness, not the decision, because dismissing or steering an exec candidate also
+    /// moves the runner's approval anchor. Exec-ness is server-side state this client cannot see,
+    /// so sending the header only on `approved` 403s every dismiss/steer of an exec item — the
+    /// regression this restores. Withholding it here buys nothing: the capability is device-local
+    /// Review authority and this is the one route that checks it.
     func decideAgentInboxItem(id: String, decision: String, actor: String, reason: String? = nil) async throws -> AgentInboxActionResult {
         var body: [String: Any] = ["itemId": id, "decision": decision, "actor": actor]
         if let reason { body["reason"] = reason }
         return try await postInboxAction(
             path: "core/agent/inbox/decide",
             body: body,
-            includeReviewCapability: decision == "approved"
+            includeReviewCapability: true
         )
     }
 
@@ -139,6 +148,9 @@ public extension BrainClient {
         return env.items.compactMap(\.value)
     }
 
+    /// `includeReviewCapability` defaults to false so /execute — which has no Review gate
+    /// server-side — keeps sending only the front-door bearer. The capability goes to the one
+    /// route that checks it, and no further.
     private func postInboxAction(
         path: String,
         body: [String: Any],
