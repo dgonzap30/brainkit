@@ -1,0 +1,60 @@
+name: merge-watch
+
+# Vendored from dgonzap30/merge-policy by `merge-policy install`. Edit the
+# source and re-install; do not edit this copy.
+#
+# After a merge: watches default-branch CI and production deploy statuses.
+# A regression caused by an auto-merged PR opens a revert PR that the gate
+# merges on green; anything else (human merge, migration, main already red)
+# alerts the owner through a GitHub issue mention (GitHub Mobile push).
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: ["main"]
+
+permissions: {}
+
+concurrency:
+  group: merge-watch-${{ github.event.workflow_run.head_sha || github.event.deployment.sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: merge-watch
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push') ||
+      (github.event_name == 'deployment_status' &&
+        contains(fromJSON('[]'), github.event.deployment.environment) &&
+        contains(fromJSON('["success","failure","error"]'), github.event.deployment_status.state))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: merge-bot
+      deployment: false
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Mint the merge-bot token
+        id: bot
+        if: vars.MERGE_BOT_CLIENT_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MERGE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.MERGE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Watch
+        run: node .github/merge-policy/watch.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ steps.bot.outputs.token }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
