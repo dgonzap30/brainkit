@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { classify, needsHeadCommit, SQL_CONTENT_MAX, sqlContentNeeds, sqlModeNeeds } from "./classify.mjs";
+import { classify, needsHeadCommit, renameBlobNeeds, SQL_CONTENT_MAX, sqlContentNeeds, sqlModeNeeds } from "./classify.mjs";
 import { APPROVAL_CHECK, approvalCheck, approvalRecord, approvalRunAllows, approvalToRecord, decide, keepOwnerArming, LABELS, ownerApproved } from "./gate.mjs";
 import { GitHub } from "./github.mjs";
 import { botAppId, loadPolicy } from "./policy.mjs";
@@ -121,8 +121,13 @@ export async function fetchSqlContents(gh, pr, files) {
   return out;
 }
 
-/** The git mode ("100644", "120000", ...) of `path` in commit `sha`, walking one tree per directory. */
+/** The git mode ("100644", "120000", ...) of `path` in commit `sha`. */
 async function treeMode(gh, sha, path, cache) {
+  return (await treeEntry(gh, sha, path, cache, "head")).mode;
+}
+
+/** The tree entry {mode, type, sha} of `path` in commit `sha`, walking one tree per directory. */
+async function treeEntry(gh, sha, path, cache, side) {
   const parts = path.split("/");
   let tree = sha;
   for (let i = 0; i < parts.length; i += 1) {
@@ -131,12 +136,31 @@ async function treeMode(gh, sha, path, cache) {
     const at = parts.slice(0, i + 1).join("/");
     if (t?.truncated) throw new Error(`tree listing truncated above ${at}`);
     const e = (t?.tree || []).find((x) => x.path === parts[i]);
-    if (!e) throw new Error(`${at} not in the head tree`);
-    if (i === parts.length - 1) return e.mode;
+    if (!e) throw new Error(`${at} not in the ${side} tree`);
+    if (i === parts.length - 1) return e;
     if (e.type !== "tree") throw new Error(`${at} is not a directory (mode ${e.mode})`);
     tree = e.sha;
   }
   throw new Error("empty path");
+}
+
+/**
+ * Base blob SHAs of the renamed files classify needs to tell a plain move
+ * from a changed binary (renameBlobNeeds). A failed lookup is recorded as an
+ * error, which ownerLineHits counts as a diff not shown.
+ */
+export async function fetchRenameBlobs(gh, pr, files, policy) {
+  const out = {};
+  const trees = new Map();
+  for (const path of renameBlobNeeds(files, policy)) {
+    try {
+      const e = await treeEntry(gh, pr.base.sha, path, trees, "base");
+      out[path] = e.type === "blob" ? e.sha : { error: `${path} is a ${e.type} in the base tree` };
+    } catch (e) {
+      out[path] = { error: e.message };
+    }
+  }
+  return out;
 }
 
 /**
@@ -240,6 +264,7 @@ async function cmdClassify() {
     c = classify(policy, {
       headCommit,
       sqlContents: await fetchSqlContents(gh, pr, files),
+      renameBlobs: await fetchRenameBlobs(gh, pr, files, policy),
       pr,
       files,
       repo,

@@ -17,6 +17,20 @@ export const TIERS = ["green", "reviewed", "critical", "owner"];
 export const REVERT_MARKER = "<!-- merge-policy:revert";
 const CONTROL = /[\x00-\x1f\x7f]/;
 const FILE_LIST_CAP = 3000;
+const LOCKFILES = "**/{pnpm-lock.yaml,package-lock.json,yarn.lock,bun.lock,bun.lockb,Cargo.lock,Podfile.lock,Package.resolved,uv.lock,poetry.lock}";
+// owner_lines reads changed lines up to this long; a longer one cannot be
+// scanned in bounded time and counts as unread.
+export const OWNER_LINE_MAX = 20000;
+// A PR with more renames to look up than this counts them all as unread.
+export const RENAME_BLOB_MAX = 100;
+const compiles = (s) => {
+  try {
+    new RegExp(s);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 export const DEFAULTS = {
   owner_paths: [
@@ -75,7 +89,7 @@ export const DEFAULTS = {
   ],
   // Excluded from the size count: generated and lock files.
   size_exempt_paths: [
-    "**/{pnpm-lock.yaml,package-lock.json,yarn.lock,bun.lock,bun.lockb,Cargo.lock,Podfile.lock,Package.resolved,uv.lock,poetry.lock}",
+    LOCKFILES,
     "**/*.snap",
     "**/*.generated.*",
     "**/database.types.ts",
@@ -499,38 +513,74 @@ function paths(files) {
 }
 
 /**
+ * Previous paths whose base blob SHA ownerLineHits needs: renames GitHub
+ * shows no diff for, which are plain moves only if the blob is unchanged.
+ * None when the policy has no owner_lines; none past RENAME_BLOB_MAX either,
+ * so every such rename counts unread instead of spending the API budget.
+ * @returns {string[]}
+ */
+export function renameBlobNeeds(files, policy) {
+  if (![].concat(policy?.owner_lines || []).some((o) => o?.patterns?.length)) return [];
+  const needs = [...new Set(files.filter((f) => f.status === "renamed" && f.previous_filename && typeof f.patch !== "string").map((f) => f.previous_filename))];
+  return needs.length > RENAME_BLOB_MAX ? [] : needs;
+}
+
+/**
  * Changes owned by what they say, not where they sit (a price figure in
  * general copy). `owner_lines` is one rule or a list of rules
- * {why, paths, exempt, patterns}. Added and removed lines both count. A file
- * in scope whose diff GitHub does not show (binary, or too large) cannot be
- * read, and a file renamed out of an exempt path (a test fixture becoming
- * live copy) brings lines its diff does not show, so both count too.
+ * {why, paths, exempt, patterns}. Added and removed lines both count, and a
+ * rename is in scope when either of its names is (a price edited while its
+ * file moves out of scope is still a price edit). A file in scope whose diff
+ * GitHub does not show (binary, or too large) cannot be read, and a file
+ * renamed between an exempt path and live copy (a test fixture going live, or
+ * live copy retired into a fixture) moves lines its diff does not show, so
+ * both count too. A move that keeps the file byte for byte (its blob equals
+ * the base's, see renameBlobNeeds) changes no wording. Only lockfiles skip the
+ * scan: other size-exempt names (`*.generated.*`) are names anyone can
+ * choose. A pattern that does not compile holds the PR for the owner instead
+ * of failing every gate run, and a changed line over OWNER_LINE_MAX characters
+ * counts unread rather than stall the gate on a minified file.
  * @param {Array} files  PR files (REST shape)
  * @param {object} p     merged policy
+ * @param {Record<string, string|{error: string}>} [renameBlobs]  base blob SHA by previous_filename
  * @returns {string[]}   one reason per rule that hit, e.g. "price figure: a.ts, b.ts"
  */
-export function ownerLineHits(files, p) {
+export function ownerLineHits(files, p, renameBlobs = {}) {
   const reasons = [];
   for (const o of [].concat(p.owner_lines || [])) {
     if (!o?.patterns?.length) continue;
+    const bad = o.patterns.filter((s) => !compiles(s));
+    if (bad.length) {
+      reasons.push(`${o.why || "owner line"}: invalid pattern ${bad.map((s) => JSON.stringify(s)).join(", ")}`);
+      continue;
+    }
     const res = o.patterns.map((s) => new RegExp(s));
     const scope = o.paths?.length ? o.paths : ["**"];
-    const skip = [...(o.exempt || []), ...(p.size_exempt_paths || [])];
+    const skip = [...(o.exempt || []), LOCKFILES];
     const inScope = (path) => matchesAny(path, scope) && !matchesAny(path, skip);
     const hits = [];
     for (const f of files) {
       const name = f.filename || "";
-      if (!inScope(name)) continue;
-      if (f.previous_filename && matchesAny(f.previous_filename, skip)) {
-        hits.push(`${name} (moved from exempt ${f.previous_filename})`);
+      const prev = f.previous_filename;
+      if (!inScope(name) && !(prev && inScope(prev))) continue;
+      if (prev && inScope(name) && matchesAny(prev, skip)) {
+        hits.push(`${name} (moved from exempt ${prev})`);
+        continue;
+      }
+      if (prev && inScope(prev) && matchesAny(name, skip)) {
+        hits.push(`${prev} (moved to exempt ${name})`);
         continue;
       }
       if (typeof f.patch !== "string") {
-        if ((f.additions || 0) + (f.deletions || 0) > 0) hits.push(`${name} (diff not shown)`);
+        // A binary reports 0 lines and no diff, renamed or not; only a blob
+        // equal to the base's is a plain move.
+        const moved = f.status === "renamed" && prev && typeof renameBlobs[prev] === "string" && renameBlobs[prev] === f.sha;
+        if (!moved) hits.push(`${name} (diff not shown)`);
         continue;
       }
       const changed = f.patch.split("\n").filter((l) => l[0] === "+" || l[0] === "-");
-      if (changed.some((l) => res.some((re) => re.test(l.slice(1))))) hits.push(name);
+      if (changed.some((l) => l.length > OWNER_LINE_MAX + 1)) hits.push(`${name} (line over ${OWNER_LINE_MAX} characters)`);
+      else if (changed.some((l) => res.some((re) => re.test(l.slice(1))))) hits.push(name);
     }
     if (hits.length) reasons.push(`${o.why || "owner line"}: ${hits.slice(0, 5).join(", ")}`);
   }
@@ -548,11 +598,12 @@ export function ownerLineHits(files, p) {
  * @param {string} [input.botLogin] login of the merge bot App (e.g. "x[bot]")
  * @param {object} [input.headCommit] GET /repos/{repo}/commits/{head sha} (needed for dependabot and merge-bot reverts)
  * @param {object} [input.sqlContents] full head/base contents of every file sqlContentNeeds(files) names
+ * @param {object} [input.renameBlobs] base blob SHA (or {error}) of every path renameBlobNeeds(files, policy) names
  * @returns {{tier: string, reasons: string[], reviewers: string[], migration: boolean}}
  */
 export function classify(policy, input) {
   const p = { ...DEFAULTS, ...policy };
-  const { pr, files, repo, defaultBranch, frozen = false, botLogin, headCommit, sqlContents } = input;
+  const { pr, files, repo, defaultBranch, frozen = false, botLogin, headCommit, sqlContents, renameBlobs } = input;
   const labels = (pr.labels || []).map((l) => (typeof l === "string" ? l : l.name));
   const author = pr.user?.login || "";
   const reasons = [];
@@ -592,7 +643,7 @@ export function classify(policy, input) {
   const reviewersFor = (tier) => (p.reviewers?.[tier] ?? DEFAULT_REVIEWERS[tier]);
 
   const ownerHits = all.filter((f) => matchesAny(f, p.owner_paths));
-  const lineHits = ownerLineHits(files, p);
+  const lineHits = ownerLineHits(files, p, renameBlobs);
 
   // Reverts the merge bot opened (merge-watch) restore a known-good state, but
   // only the App's own single signed commit counts (see botRevertProof). An
