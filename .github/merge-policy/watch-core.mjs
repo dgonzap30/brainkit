@@ -28,6 +28,7 @@ export function planResponse(s) {
   if (s.migration) return alert("PR carried a migration — needs a forward fix, a revert would not un-migrate");
   if (!s.autoRevert) return alert("auto_revert is off for this repo");
   if (s.mainWasRed === true) return alert("default branch was already red before this merge");
+  if (s.mainWasRed !== false) return alert("previous default-branch state is unknown — not auto-reverting");
   const freeze = s.recentReverts + 1 >= s.freezeAfter;
   return { action: "revert", freeze, reason: freeze ? `revert #${s.recentReverts + 1} in 24h — freezing auto-merge` : "regression after an auto-merge" };
 }
@@ -72,7 +73,11 @@ export function attribution(pr, botLogin) {
 // often behind deployment protection. Only a stable production URL is worth
 // polling; without one merge-watch watches deployment status alone.
 const PER_DEPLOYMENT_HOST = [
-  /^[a-z0-9-]+-[a-z0-9]{9}-[a-z0-9-]+\.vercel\.app$/, // <project>-<hash>-<scope>.vercel.app
+  // <project>-<hash>-<scope>.vercel.app. A stable name with a nine-letter
+  // middle word (acme-dashboard-prod) also matches: skipped, merge-watch falls
+  // back to deployment status. Requiring a digit would instead freeze ~5% of
+  // real per-deployment URLs (hashes without one) as health URLs.
+  /^[a-z0-9-]+-[a-z0-9]{9}-[a-z0-9-]+\.vercel\.app$/,
   /^[a-z0-9-]+-git-[a-z0-9-]+\.vercel\.app$/, // <project>-git-<branch>-<scope>.vercel.app
   /^[a-z0-9-]+--[a-z0-9-]+\.netlify\.app$/, // <id>--<site>.netlify.app
   /^[a-f0-9]{8}\.[a-z0-9-]+\.pages\.dev$/, // <hash>.<project>.pages.dev (Cloudflare Pages)
@@ -185,12 +190,48 @@ export async function vetHealthUrls(urls, probe, { override } = {}) {
   return { kept, rejected };
 }
 
-/**
- * The production deployment before `dep` in the same environment, from a
- * newest-first deployments list, or null. Its last status tells merge-watch
- * whether production was already broken before this merge.
- */
-export function previousDeploy(deployments, dep) {
+const COMMIT_SHA = /^[0-9a-f]{40}$/i;
+const knownId = (v) => (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) || (typeof v === "string" && v.length > 0);
+const knownTime = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(v) && Number.isFinite(Date.parse(v));
+const knownSha = (v) => typeof v === "string" && COMMIT_SHA.test(v);
+
+/** Inspect one or more newest-first pages for the nearest earlier deployment
+ * of a distinct known commit in the same environment. `unknown` is distinct
+ * from `absent`: malformed identities/timestamps cannot authorize a revert. */
+export function previousDeployResult(deployments, dep) {
+  if (!dep || !knownId(dep.id) || !knownSha(dep.sha) || typeof dep.environment !== "string" || !dep.environment || !knownTime(dep.created_at)) return { state: "unknown" };
+  if (!Array.isArray(deployments)) return { state: "unknown" };
   const at = Date.parse(dep.created_at);
-  return (deployments || []).find((d) => d.id !== dep.id && d.environment === dep.environment && Date.parse(d.created_at) < at) || null;
+  let best = null;
+  for (const d of deployments) {
+    if (!d || !knownId(d.id) || !knownSha(d.sha) || typeof d.environment !== "string" || !d.environment || !knownTime(d.created_at)) return { state: "unknown" };
+    const t = Date.parse(d.created_at);
+    if (d.id === dep.id || d.environment !== dep.environment || t >= at || d.sha === dep.sha) continue;
+    if (!best || t > Date.parse(best.created_at)) best = d;
+  }
+  return best ? { state: "found", value: best } : { state: "absent" };
+}
+
+/** Compatibility helper for pure callers that only need the item. */
+export function previousDeploy(deployments, dep) {
+  const r = previousDeployResult(deployments, dep);
+  return r.state === "found" ? r.value : null;
+}
+
+/** Workflow counterpart to previousDeployResult. Only completed push runs of
+ * the same workflow and branch participate; retries of the current SHA do not. */
+export function previousWorkflowRunResult(runs, run) {
+  const valid = (r) => r && knownId(r.id) && knownId(r.workflow_id) && knownSha(r.head_sha) && typeof r.head_branch === "string" && r.head_branch && knownTime(r.created_at)
+    && typeof r.event === "string" && typeof r.status === "string";
+  if (!valid(run)) return { state: "unknown" };
+  if (!Array.isArray(runs)) return { state: "unknown" };
+  const at = Date.parse(run.created_at);
+  let best = null;
+  for (const r of runs) {
+    if (!valid(r)) return { state: "unknown" };
+    const t = Date.parse(r.created_at);
+    if (r.id === run.id || r.workflow_id !== run.workflow_id || r.head_branch !== run.head_branch || r.event !== "push" || r.status !== "completed" || t >= at || r.head_sha === run.head_sha) continue;
+    if (!best || t > Date.parse(best.created_at)) best = r;
+  }
+  return best ? { state: "found", value: best } : { state: "absent" };
 }
