@@ -22,7 +22,7 @@ const MANAGED = [LABELS.armed, LABELS.owner, LABELS.changes];
  * @param {boolean|null} [ev.ciGreen]  direct: true all required checks green, false any red, null pending
  * @param {boolean} [ev.mergeBot]  a merge-bot App token is available (default true)
  * @param {boolean} [ev.ownerApproved]  owner tier: the owner approved this head (see ownerApproved())
- * @returns {{conclusion: "success"|"failure", action: "arm"|"merge"|"disarm"|"none", add: string[], remove: string[], headline: string, notifyOwner: boolean}}
+ * @returns {{conclusion: "success"|"failure", action: "arm"|"merge"|"disarm"|"none", add: string[], remove: string[], headline: string, notifyOwner: boolean, approvalNeeded?: boolean}}
  */
 export function decide(c, ev) {
   const d = decideEvidence(c, ev);
@@ -91,6 +91,7 @@ function decideEvidence(c, ev) {
       ...keep(LABELS.owner),
       headline: `owner approval needed — ${c.reasons.join("; ")}. Reviews passed; add the label \`${LABELS.approve}\` to merge this head`,
       notifyOwner: true,
+      approvalNeeded: true,
     };
   }
   // An approved owner-tier PR arms like any other tier from here.
@@ -225,4 +226,72 @@ export function approvalRunAllows(ev, headSha) {
 /** Owner tier: an auto-merge the owner enabled himself is his call, never disarmed. */
 export function keepOwnerArming(tier, pr, ownerLogin) {
   return tier === "owner" && Boolean(ownerLogin) && pr?.auto_merge?.enabled_by?.login === ownerLogin;
+}
+
+// ---- notifying the owner ---------------------------------------------------
+// Two notifications only, both through GitHub (email and mobile push):
+// a review request when someone else's PR becomes ready, and one mention per
+// head when an owner-tier PR waits on merge:approve.
+
+const isBot = (user) => user?.type === "Bot" || /\[bot\]$/.test(user?.login || "");
+
+/**
+ * Should the gate request the owner's review on this PR? Once per PR: a
+ * ready, open PR by a trusted human other than the owner, where the owner is
+ * not already requested and was never requested before (so removing himself,
+ * or a submitted review clearing the request, is never undone).
+ * @param {object} pr      the PR (REST shape)
+ * @param {object} policy  merged policy (owner_login, trusted_associations, trusted_authors)
+ * @param {object[]|null} events  GET /repos/{repo}/issues/{n}/events; null when not read yet
+ * @returns {boolean|"needs-events"}
+ */
+export function ownerReviewNeeded(pr, policy, events = null) {
+  const owner = policy?.owner_login;
+  const author = pr?.user?.login;
+  if (!owner || !author || author === owner || isBot(pr.user)) return false;
+  if (pr.draft || (pr.state && pr.state !== "open")) return false;
+  const trusted = (policy.trusted_associations || []).includes(pr.author_association) || (policy.trusted_authors || []).includes(author);
+  if (!trusted) return false;
+  if ((pr.requested_reviewers || []).some((u) => u?.login === owner)) return false;
+  if (events === null) return "needs-events";
+  return !(events || []).some((e) => e?.event === "review_requested" && e.requested_reviewer?.login === owner);
+}
+
+export const OWNER_NOTICE = "merge-policy:owner";
+
+/** The hidden marker of the owner notice for one head. */
+export const ownerNoticeMarker = (sha) => `<!-- ${OWNER_NOTICE} sha=${sha} -->`;
+
+/**
+ * Was the owner already told about this head? Only a comment that the
+ * mention's poster wrote AND that starts with the marker counts: the gate's
+ * sticky comment echoes reviewer text, so a marker anywhere else in a comment
+ * (even one of the gate's own) never suppresses the mention.
+ * Matches the older `sha=<head> kind=<action>` marker too.
+ * @param {object[]} comments  GET /repos/{repo}/issues/{n}/comments
+ * @param {string[]} authors   logins that post the mention (the App's `<bot_slug>[bot]`; github-actions[bot], the fallback poster)
+ */
+export function ownerNotified(comments, sha, authors) {
+  const prefix = `<!-- ${OWNER_NOTICE} sha=${sha}`;
+  return (comments || []).some(
+    (c) => authors.includes(c?.user?.login) && typeof c.body === "string" && (c.body.startsWith(`${prefix} `) || c.body.startsWith(`${prefix}-->`)),
+  );
+}
+
+/**
+ * The one comment telling the owner a head needs him.
+ * @param {{sha: string, owner: string, tier: string, reasons: string[], headline: string, approvalNeeded: boolean, reviews?: string}} n
+ */
+export function ownerNotice({ sha, owner, tier, reasons, headline, approvalNeeded, reviews }) {
+  const short = sha.slice(0, 7);
+  const lines = approvalNeeded
+    ? [
+        `@${owner} this PR needs you: add the label \`${LABELS.approve}\` to merge head \`${short}\`.`,
+        "",
+        `- Why it is \`${tier}\` tier: ${reasons.join("; ") || "(no reason recorded)"}`,
+        reviews ? `- Reviews: ${reviews}` : null,
+        "- The label approves this exact head; a new push needs a new approval.",
+      ]
+    : [`@${owner} ${headline} (head \`${short}\`)`];
+  return `${ownerNoticeMarker(sha)}\n${lines.filter((l) => l !== null).join("\n")}`;
 }

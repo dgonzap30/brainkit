@@ -7,7 +7,8 @@ name: merge-gate
 # the BASE branch's copy.
 #
 # Flow: classify (tier from paths/content) -> review (AI verdicts, posted by
-# the merge-bot App as merge-review/<name> check runs on the head SHA) ->
+# the merge-bot App as merge-review/<name> check runs on the head SHA; a pass
+# whose change a new head repeats exactly is carried to it instead) ->
 # merge-gate-runner, which arms GitHub auto-merge when the tier's
 # evidence is complete (disarms otherwise) and posts the one required check,
 # `merge-gate`, as the merge-bot App on the head SHA. The ruleset accepts
@@ -36,12 +37,13 @@ jobs:
     name: classify
     if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Carry-forward fetches the PR's history (no blobs) into a throwaway repo.
+    timeout-minutes: 10
     permissions:
-      contents: read
-      pull-requests: write # disarm auto-merge the moment a new head arrives
+      contents: read # also the carry-forward fetch: git objects as data, never checked out or run
+      pull-requests: write # drop merge:approve when a new head arrives (the runner disarms, with the App)
       issues: read
-      checks: read # cached verdicts: the App's merge-review/* check runs
+      checks: read # cached and carried verdicts: the App's merge-review/* check runs
     outputs:
       skip: ${{ steps.c.outputs.skip }}
       pr: ${{ steps.c.outputs.pr }}
@@ -50,9 +52,12 @@ jobs:
       tier: ${{ steps.c.outputs.tier }}
       reviewers: ${{ steps.c.outputs.reviewers }}
       reviewers_needed: ${{ steps.c.outputs.reviewers_needed }}
+      carried: ${{ steps.c.outputs.carried }}
+      review_guides: ${{ steps.c.outputs.review_guides }}
       reasons: ${{ steps.c.outputs.reasons }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — base branch: the trusted rules
+      # Base branch: the trusted rules.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: .github
@@ -68,7 +73,7 @@ jobs:
     if: needs.classify.outputs.skip == 'false' && needs.classify.outputs.reviewers_needed != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # The Claude tokens and the App key are merge-bot environment secrets:
+    # The model credentials (Claude tokens, OPENAI_API_KEY) and the App key are merge-bot environment secrets:
     # only jobs on the default branch's ref (pull_request_target into it,
     # workflow_run, a dispatch on it) get them. A run of a merge-gate.yml copy
     # from another branch cannot, so it cannot post a verdict as the App.
@@ -83,7 +88,8 @@ jobs:
       matrix:
         reviewer: ${{ fromJSON(needs.classify.outputs.reviewers_needed) }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 — base branch; the head is fetched as data
+      # Base branch; the head is fetched as data.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -97,6 +103,8 @@ jobs:
           gh auth setup-git
           git fetch --no-tags origin "$HEAD_SHA"
       - name: Install Claude Code
+        # The cross reviewer calls the OpenAI Responses API from review.mjs with no tools.
+        if: matrix.reviewer.name != 'cross'
         run: npm install -g @anthropic-ai/claude-code@2.1.284
       - name: Review
         run: node .github/merge-policy/review.mjs
@@ -110,11 +118,18 @@ jobs:
           BASE_SHA: ${{ needs.classify.outputs.base_sha }}
           TIER: ${{ needs.classify.outputs.tier }}
           REASONS: ${{ needs.classify.outputs.reasons }}
+          # Names only: review.mjs reads each guide from BASE_SHA's tree, never from the head.
+          REVIEW_GUIDES: ${{ needs.classify.outputs.review_guides }}
+          # A follow-up review (src/delta.mjs): the earlier verdict's head, depth
+          # and findings, or null for a review of the whole PR.
+          DELTA: ${{ toJSON(matrix.reviewer.delta) }}
           REVIEW_OUT: review-out
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
-          CLAUDE_CODE_OAUTH_TOKEN_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_3 }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Each reviewer gets only its own provider's credential.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ matrix.reviewer.name != 'cross' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN_2: ${{ matrix.reviewer.name != 'cross' && secrets.CLAUDE_CODE_OAUTH_TOKEN_2 || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN_3: ${{ matrix.reviewer.name != 'cross' && secrets.CLAUDE_CODE_OAUTH_TOKEN_3 || '' }}
+          ANTHROPIC_API_KEY: ${{ matrix.reviewer.name != 'cross' && secrets.ANTHROPIC_API_KEY || '' }}
+          OPENAI_API_KEY: ${{ matrix.reviewer.name == 'cross' && secrets.OPENAI_API_KEY || '' }}
       # The App token exists only after the reviewer is gone: no Claude
       # process may outlive the Review step into the steps that hold it.
       - name: No reviewer process left
@@ -141,6 +156,11 @@ jobs:
           REVIEWER: ${{ matrix.reviewer.name }}
           PR_NUMBER: ${{ needs.classify.outputs.pr }}
           HEAD_SHA: ${{ needs.classify.outputs.head_sha }}
+          # The base the reviewer diffed against, bound into the verdict: a pass
+          # carries to a later head only while the PR's merge-base is unchanged.
+          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
+          # Bound into the verdict only when the record says the follow-up ran.
+          DELTA: ${{ toJSON(matrix.reviewer.delta) }}
           REVIEW_OUT: review-out
       # A record of the review and the sticky comment's findings; never evidence.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -188,8 +208,23 @@ jobs:
           client-id: ${{ vars.MERGE_BOT_CLIENT_ID }}
           private-key: ${{ secrets.MERGE_BOT_PRIVATE_KEY }}
           permission-contents: write
-          permission-pull-requests: write
+          permission-pull-requests: write # arming, the owner's review request and mention
           permission-checks: write # the merge-gate check run
+      # A pass carried from an earlier head whose change this head repeats
+      # exactly (classify checked it; src/carry.mjs). Posted here because this
+      # job already holds the App token and runs no model and no PR code. A
+      # failed post leaves the verdict missing, and Decide fails closed.
+      - name: Post carried verdicts as the merge-bot App
+        if: needs.classify.result == 'success' && needs.classify.outputs.skip == 'false' && needs.classify.outputs.carried != '[]' && needs.classify.outputs.carried != ''
+        continue-on-error: true
+        run: node .github/merge-policy/run-gate.mjs carry-post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_TOKEN: ${{ steps.bot.outputs.token }}
+          PR_NUMBER: ${{ needs.classify.outputs.pr }}
+          HEAD_SHA: ${{ needs.classify.outputs.head_sha }}
+          REVIEWERS: ${{ needs.classify.outputs.reviewers }}
+          CARRIED: ${{ needs.classify.outputs.carried }}
       - name: Fail closed when classification did not complete
         if: needs.classify.result != 'success' && github.event_name != 'workflow_run'
         run: node .github/merge-policy/run-gate.mjs fail-check

@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { LABELS } from "./gate.mjs";
 import { GitHub } from "./github.mjs";
 import { loadPolicy } from "./policy.mjs";
-import { attribution, healthVerdict, openRevertFor, pickMergedPr, planResponse, previousDeploy, revertBody } from "./watch-core.mjs";
+import { attribution, healthVerdict, openRevertFor, pickMergedPr, planResponse, previousDeployResult, previousWorkflowRunResult, revertBody } from "./watch-core.mjs";
 
 const env = process.env;
 const repo = env.GITHUB_REPOSITORY;
@@ -19,15 +19,55 @@ function event() {
     : {};
 }
 
-async function mainWasRed(gh, run) {
-  // The newest completed push run of the same workflow on the same branch
-  // before this one, for a different commit.
-  const runs = await gh.get(
-    `/repos/{repo}/actions/workflows/${run.workflow_id}/runs?branch=${encodeURIComponent(run.head_branch)}&event=push&status=completed&per_page=20`,
-  );
-  const prev = runs.workflow_runs.find((r) => r.id !== run.id && r.head_sha !== run.head_sha && r.created_at < run.created_at);
+const HISTORY_PAGES = 5;
+const HISTORY_PAGE_SIZE = 20;
+
+async function boundedPrevious(gh, path, key, inspect) {
+  const seen = [];
+  const seenIds = new Set();
+  let priorPageOldest = null;
+  for (let page = 1; page <= HISTORY_PAGES; page += 1) {
+    let data;
+    try {
+      data = await gh.get(`${path}&per_page=${HISTORY_PAGE_SIZE}&page=${page}`);
+    } catch {
+      return null;
+    }
+    const rows = key ? data?.[key] : data;
+    if (!Array.isArray(rows) || rows.length > HISTORY_PAGE_SIZE) return null;
+    let pageNewest = null;
+    let pageOldest = null;
+    let priorRowTime = null;
+    for (const row of rows) {
+      const id = row?.id;
+      const idKey = String(id);
+      const at = Date.parse(row?.created_at);
+      if (!((typeof id === "number" && Number.isSafeInteger(id) && id >= 0) || (typeof id === "string" && id.length > 0)) || !Number.isFinite(at)) return null;
+      // A moving/repeated page can hide the actual predecessor. Any identity
+      // overlap or backwards page progress makes this bounded read incomplete.
+      if (seenIds.has(idKey) || (priorRowTime !== null && at > priorRowTime)) return null;
+      seenIds.add(idKey);
+      priorRowTime = at;
+      pageNewest = pageNewest === null ? at : Math.max(pageNewest, at);
+      pageOldest = pageOldest === null ? at : Math.min(pageOldest, at);
+    }
+    if (priorPageOldest !== null && pageNewest !== null && pageNewest > priorPageOldest) return null;
+    if (pageOldest !== null) priorPageOldest = pageOldest;
+    seen.push(...rows);
+    const found = inspect(seen);
+    if (found.state === "unknown") return null;
+    if (found.state === "found") return found.value;
+    if (rows.length < HISTORY_PAGE_SIZE) return null;
+  }
+  return null; // the bounded search was exhausted by retries/unknown history
+}
+
+export async function mainWasRed(gh, run) {
+  const path = `/repos/{repo}/actions/workflows/${run?.workflow_id}/runs?branch=${encodeURIComponent(run?.head_branch || "")}&event=push&status=completed`;
+  const prev = await boundedPrevious(gh, path, "workflow_runs", (rows) => previousWorkflowRunResult(rows, run));
   if (!prev) return null;
-  return prev.conclusion !== "success";
+  if (prev.conclusion === "success") return false;
+  return ["failure", "timed_out", "cancelled", "action_required", "startup_failure"].includes(prev.conclusion) ? true : null;
 }
 
 /** One health poll: GET with redirects followed. The plan's install-time
@@ -44,13 +84,19 @@ export async function probeHealth(url) {
 
 /** Production was already broken before this deploy: the previous deployment
  * to the environment ended failure or error (null when unknown). */
-async function deployWasRed(gh, dep) {
-  const deps = await gh.get(`/repos/{repo}/deployments?environment=${encodeURIComponent(dep.environment)}&per_page=20`).catch(() => null);
-  const prev = previousDeploy(deps, dep);
+export async function deployWasRed(gh, dep) {
+  const path = `/repos/{repo}/deployments?environment=${encodeURIComponent(dep?.environment || "")}`;
+  const prev = await boundedPrevious(gh, path, null, (rows) => previousDeployResult(rows, dep));
   if (!prev) return null;
-  const st = await gh.get(`/repos/{repo}/deployments/${prev.id}/statuses?per_page=1`).catch(() => null);
+  let st;
+  try {
+    st = await gh.get(`/repos/{repo}/deployments/${prev.id}/statuses?per_page=1`);
+  } catch {
+    return null;
+  }
   const state = Array.isArray(st) ? st[0]?.state : null;
-  return state ? ["failure", "error"].includes(state) : null;
+  if (state === "success") return false;
+  return ["failure", "error"].includes(state) ? true : null;
 }
 
 async function healthProblems(urls) {
