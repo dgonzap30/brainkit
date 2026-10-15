@@ -1,7 +1,9 @@
 name: merge-watch
 
-# Vendored from dgonzap30/merge-policy by `merge-policy install`. Edit the
-# source and re-install; do not edit this copy.
+# Installed by `merge-policy install` from dgonzap30/merge-policy; the engine
+# is fetched at run time from that private repository at the
+# stable channel (see merge-gate.yml). Edit the source and
+# re-install; do not edit this copy.
 #
 # After a merge: watches default-branch CI and production deploy statuses.
 # A regression caused by an auto-merged PR opens a revert PR that the gate
@@ -16,20 +18,20 @@ on:
 
 permissions: {}
 
+# One deciding run per commit at a time. An event the job skips (WATCH_EVENT_IF
+# in src/gate.mjs: a deploy status or environment that is not watched, a CI
+# run that is not a push) takes a group of its own, so it never replaces a
+# pending run that decides.
 concurrency:
-  group: merge-watch-${{ github.event.workflow_run.head_sha || github.event.deployment.sha || github.run_id }}
+  group: merge-watch-${{ !(github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' || github.event_name == 'deployment_status' && contains(fromJSON('[]'), github.event.deployment.environment) && contains(fromJSON('["success","failure","error"]'), github.event.deployment_status.state)) && format('idle-{0}', github.run_id) || github.event.workflow_run.head_sha || github.event.deployment.sha || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   watch:
     name: merge-watch
-    if: >-
-      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push') ||
-      (github.event_name == 'deployment_status' &&
-        contains(fromJSON('[]'), github.event.deployment.environment) &&
-        contains(fromJSON('["success","failure","error"]'), github.event.deployment_status.state))
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    if: (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' || github.event_name == 'deployment_status' && contains(fromJSON('[]'), github.event.deployment.environment) && contains(fromJSON('["success","failure","error"]'), github.event.deployment_status.state))
+    runs-on: ${{ vars.MERGE_POLICY_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
     environment:
       name: merge-bot
       deployment: false
@@ -40,9 +42,60 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 2
         with:
           persist-credentials: false
           sparse-checkout: .github
+      # The shared engine: dgonzap30/merge-policy at the stable channel,
+      # fetched with a merge-bot token that can read that one repository and
+      # nothing else, revoked when the fetch ends (src/engine.mjs).
+      - name: Mint the engine-read token
+        id: engine-token
+        timeout-minutes: 1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MERGE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.MERGE_BOT_PRIVATE_KEY }}
+          owner: dgonzap30
+          repositories: merge-policy
+          permission-contents: read
+          skip-token-revoke: true # the fetch revokes it before any later step runs
+      - name: Fetch the merge-policy engine
+        id: engine
+        # A stall fails the step (curl limits, then this backstop), so the
+        # fail-closed steps below still run; a job timeout would cancel them.
+        timeout-minutes: 2
+        env:
+          ENGINE_TOKEN: ${{ steps.engine-token.outputs.token }}
+          ENGINE_REF: stable
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/dgonzap30/merge-policy"
+          hdr=(-H "Authorization: Bearer $ENGINE_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
+          lim=(--connect-timeout 10 --max-time 20)
+          revoke() { curl -fsS -o /dev/null -X DELETE "${hdr[@]}" "${lim[@]}" https://api.github.com/installation/token || echo "::warning::engine token not revoked (it expires within the hour)"; }
+          trap revoke EXIT
+          field() { node -e 'const j = JSON.parse(require("fs").readFileSync(0, "utf8")); const v = process.argv[1].split(".").reduce((o, k) => o?.[k], j); if (typeof v !== "string") process.exit(1); console.log(v)' "$1"; }
+          if [[ "$ENGINE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            sha="$ENGINE_REF"
+          elif [[ "$ENGINE_REF" =~ ^(canary|stable)$ ]]; then
+            ref=$(curl -fsS "${hdr[@]}" "${lim[@]}" "$api/git/ref/tags/$ENGINE_REF")
+            if [ "$(printf '%s' "$ref" | field object.type)" != commit ]; then echo "::error::engine channel $ENGINE_REF is not a lightweight tag on a commit"; exit 1; fi
+            sha=$(printf '%s' "$ref" | field object.sha)
+          else
+            echo "::error::engine ref must be a channel (canary, stable) or a full commit SHA"; exit 1
+          fi
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::engine ref did not resolve to a commit"; exit 1; }
+          status=$(curl -fsS "${hdr[@]}" "${lim[@]}" "$api/compare/main...$sha" | field status)
+          case "$status" in behind|identical) ;; *) echo "::error::engine $sha is not on merge-policy main ($status)"; exit 1 ;; esac
+          dir="$RUNNER_TEMP/merge-policy"
+          rm -rf "$dir" && mkdir -p "$dir"
+          curl -fsSL "${hdr[@]}" --connect-timeout 10 --max-time 45 "$api/tarball/$sha" | tar -xz -C "$dir" --strip-components=1
+          test -f "$dir/src/run-gate.mjs"
+          claude_code=$(field claude_code_version < "$dir/engine.json")
+          [[ "$claude_code" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::engine.json claude_code_version is not x.y.z"; exit 1; }
+          { echo "sha=$sha"; echo "dir=$dir"; echo "claude_code=$claude_code"; } >> "$GITHUB_OUTPUT"
+          echo "merge-policy engine $sha ($ENGINE_REF)"
       - name: Mint the merge-bot token
         id: bot
         if: vars.MERGE_BOT_CLIENT_ID != ''
@@ -53,8 +106,33 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
       - name: Watch
-        run: node .github/merge-policy/watch.mjs
+        run: node "$RUNNER_TEMP/merge-policy/src/watch.mjs"
         env:
           GH_TOKEN: ${{ github.token }}
           MERGE_TOKEN: ${{ steps.bot.outputs.token }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      # The engine could not be fetched: this merge is not watched. Say so
+      # where the owner sees it (src/engine.mjs), without the engine.
+      - name: Alert the owner without the engine
+        if: failure() && steps.engine.outcome != 'success'
+        timeout-minutes: 1
+        env:
+          # The Actions token: the watch job grants issues: write. The App
+          # holds no Issues permission and is never widened for this.
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          echo "::error::the merge-policy engine could not be fetched: this merge was not watched"
+          api="https://api.github.com/repos/$REPO"
+          hdr=(--connect-timeout 5 --max-time 15 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
+          title="merge-watch could not fetch the merge-policy engine"
+          owner=$(node -e 'try { const p = JSON.parse(require("fs").readFileSync(".github/merge-policy.json", "utf8")); console.log(/^[A-Za-z0-9-]+$/.test(p.owner_login || "") ? p.owner_login : "") } catch { console.log("") }')
+          if open=$(curl -fsS "${hdr[@]}" "$api/issues?labels=merge:alert&state=open&per_page=100") && printf '%s' "$open" | node -e 'process.exit(JSON.parse(require("fs").readFileSync(0, "utf8")).some((i) => i.title === process.argv[1]) ? 0 : 1)' "$title"; then
+            echo "the alert issue is already open"
+          else
+            body=$(node -e 'const [t, o, u] = process.argv.slice(1); console.log(JSON.stringify({ title: t, labels: ["merge:alert"], body: (o ? "@" + o + "\n\n" : "") + "merge-watch could not fetch the merge-policy engine, so it is not watching merges here: no revert, no alert on a regression. Close this once a merge-watch run passes again. First failed run: " + u }))' "$title" "$owner" "$RUN_URL")
+            if curl -fsS -o /dev/null -X POST "${hdr[@]}" "$api/issues" -d "$body"; then echo "merge:alert issue opened"; else echo "::error::opening the merge:alert issue failed"; fi
+          fi
+          exit 1
