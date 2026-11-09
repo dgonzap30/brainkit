@@ -7,8 +7,9 @@ name: merge-watch
 #
 # After a merge: watches default-branch CI and production deploy statuses.
 # A regression caused by an auto-merged PR opens a revert PR that the gate
-# merges on green; anything else (human merge, migration, main already red)
-# alerts the owner through a GitHub issue mention (GitHub Mobile push).
+# merges on green; anything else (human merge, migration, main already red,
+# a CI job that lost its runner) alerts the owner through a GitHub issue
+# mention (GitHub Mobile push).
 
 on:
   workflow_run:
@@ -40,6 +41,7 @@ jobs:
       pull-requests: write
       issues: write
       actions: read
+      checks: read # a failed CI job's annotations: a lost runner is alerted, never reverted
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 2
@@ -94,7 +96,9 @@ jobs:
           test -f "$dir/src/run-gate.mjs"
           claude_code=$(field claude_code_version < "$dir/engine.json")
           [[ "$claude_code" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::engine.json claude_code_version is not x.y.z"; exit 1; }
-          { echo "sha=$sha"; echo "dir=$dir"; echo "claude_code=$claude_code"; } >> "$GITHUB_OUTPUT"
+          codex=$(field codex_version < "$dir/engine.json")
+          [[ "$codex" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::engine.json codex_version is not x.y.z"; exit 1; }
+          { echo "sha=$sha"; echo "dir=$dir"; echo "claude_code=$claude_code"; echo "codex=$codex"; } >> "$GITHUB_OUTPUT"
           echo "merge-policy engine $sha ($ENGINE_REF)"
       - name: Mint the merge-bot token
         id: bot
@@ -128,7 +132,7 @@ jobs:
           api="https://api.github.com/repos/$REPO"
           hdr=(--connect-timeout 5 --max-time 15 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")
           title="merge-watch could not fetch the merge-policy engine"
-          owner=$(node -e 'try { const p = JSON.parse(require("fs").readFileSync(".github/merge-policy.json", "utf8")); console.log(/^[A-Za-z0-9-]+$/.test(p.owner_login || "") ? p.owner_login : "") } catch { console.log("") }')
+          owner=$(node -e 'const d = process.argv[1]; try { const p = JSON.parse(require("fs").readFileSync(".github/merge-policy.json", "utf8")); console.log(p.owner_login === undefined ? d : typeof p.owner_login === "string" && /^[A-Za-z0-9-]+$/.test(p.owner_login) ? p.owner_login : "") } catch { console.log(d) }' "dgonzap30")
           if open=$(curl -fsS "${hdr[@]}" "$api/issues?labels=merge:alert&state=open&per_page=100") && printf '%s' "$open" | node -e 'process.exit(JSON.parse(require("fs").readFileSync(0, "utf8")).some((i) => i.title === process.argv[1]) ? 0 : 1)' "$title"; then
             echo "the alert issue is already open"
           else
