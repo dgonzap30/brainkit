@@ -39,18 +39,26 @@ on:
 permissions: {}
 
 # An event that brings no new head and cannot change the decision (a label
-# the gate never reads, a body edit; IDLE_EVENT_IF in src/gate.mjs) runs no
-# job: the merge-gate check the App posted for this head stands. Such a run
-# takes a group of its own, so it can never displace a pending run that does
-# decide. A dry run takes its own group too: it must never cancel a real one.
+# the gate never reads, a body edit, a CI run that was not a pull_request run;
+# IDLE_EVENT_IF in src/gate.mjs) runs no job: the merge-gate check the App
+# posted for this head stands. Such a run takes a group of its own, so it can
+# never displace a pending run that does decide. A dry run takes its own group
+# too: it must never cancel a real one. A pull_request CI run's re-evaluation
+# joins its PR's group (the number run-gate decides for), so it cannot review
+# alongside the PR event's run on the same head; only a payload with no PR (a
+# fork) falls back to its branch, prefixed so a branch named like a number
+# never lands in that PR's group.
 concurrency:
-  group: merge-gate-${{ ((github.event_name == 'pull_request_target' && ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && !(startsWith(github.event.label.name, 'merge:') && github.event.label.name != 'merge:armed' && github.event.label.name != 'merge:owner' && github.event.label.name != 'merge:changes') || github.event.action == 'unlabeled' && github.event.label.name == 'merge:retry' || github.event.action == 'edited' && !github.event.changes.base && !github.event.changes.title && !(github.event.changes.body && startsWith(github.event.pull_request.title, 'Revert "')))) || inputs.dry_run == true) && format('idle-{0}', github.run_id) || github.event.pull_request.number || inputs.pr || github.event.workflow_run.head_branch || github.run_id }}
+  group: merge-gate-${{ ((github.event_name == 'workflow_run' && github.event.workflow_run.event != 'pull_request' || github.event_name == 'pull_request_target' && ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && !(startsWith(github.event.label.name, 'merge:') && github.event.label.name != 'merge:armed' && github.event.label.name != 'merge:owner' && github.event.label.name != 'merge:changes') || github.event.action == 'unlabeled' && github.event.label.name == 'merge:retry' || github.event.action == 'edited' && !github.event.changes.base && !github.event.changes.title && !(github.event.changes.body && startsWith(github.event.pull_request.title, 'Revert "')))) || inputs.dry_run == true) && format('idle-{0}', github.run_id) || github.event.pull_request.number || inputs.pr || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch && format('branch-{0}', github.event.workflow_run.head_branch) || github.run_id }}
   cancel-in-progress: ${{ github.event.action == 'synchronize' }}
 
 jobs:
   classify:
     name: classify
-    if: (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request') && !(github.event_name == 'pull_request_target' && ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && !(startsWith(github.event.label.name, 'merge:') && github.event.label.name != 'merge:armed' && github.event.label.name != 'merge:owner' && github.event.label.name != 'merge:changes') || github.event.action == 'unlabeled' && github.event.label.name == 'merge:retry' || github.event.action == 'edited' && !github.event.changes.base && !github.event.changes.title && !(github.event.changes.body && startsWith(github.event.pull_request.title, 'Revert "'))))
+    # IDLE_EVENT_IF alone decides (it also skips a CI run that was not a
+    # pull_request run), as in the concurrency group. success() has no needs
+    # to read here; it only keeps the line from starting with YAML's `!`.
+    if: success() && !(github.event_name == 'workflow_run' && github.event.workflow_run.event != 'pull_request' || github.event_name == 'pull_request_target' && ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && !(startsWith(github.event.label.name, 'merge:') && github.event.label.name != 'merge:armed' && github.event.label.name != 'merge:owner' && github.event.label.name != 'merge:changes') || github.event.action == 'unlabeled' && github.event.label.name == 'merge:retry' || github.event.action == 'edited' && !github.event.changes.base && !github.event.changes.title && !(github.event.changes.body && startsWith(github.event.pull_request.title, 'Revert "'))))
     runs-on: ${{ vars.MERGE_POLICY_RUNNER || 'ubuntu-latest' }}
     # Carry-forward fetches the PR's history (no blobs) into a throwaway repo.
     timeout-minutes: 10
@@ -133,7 +141,9 @@ jobs:
           test -f "$dir/src/run-gate.mjs"
           claude_code=$(field claude_code_version < "$dir/engine.json")
           [[ "$claude_code" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::engine.json claude_code_version is not x.y.z"; exit 1; }
-          { echo "sha=$sha"; echo "dir=$dir"; echo "claude_code=$claude_code"; } >> "$GITHUB_OUTPUT"
+          codex=$(field codex_version < "$dir/engine.json")
+          [[ "$codex" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::engine.json codex_version is not x.y.z"; exit 1; }
+          { echo "sha=$sha"; echo "dir=$dir"; echo "claude_code=$claude_code"; echo "codex=$codex"; } >> "$GITHUB_OUTPUT"
           echo "merge-policy engine $sha ($ENGINE_REF)"
       - id: c
         run: node "$RUNNER_TEMP/merge-policy/src/run-gate.mjs" classify
@@ -279,7 +289,9 @@ jobs:
           test -f "$dir/src/run-gate.mjs"
           claude_code=$(field claude_code_version < "$dir/engine.json")
           [[ "$claude_code" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::engine.json claude_code_version is not x.y.z"; exit 1; }
-          { echo "sha=$sha"; echo "dir=$dir"; echo "claude_code=$claude_code"; } >> "$GITHUB_OUTPUT"
+          codex=$(field codex_version < "$dir/engine.json")
+          [[ "$codex" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::engine.json codex_version is not x.y.z"; exit 1; }
+          { echo "sha=$sha"; echo "dir=$dir"; echo "claude_code=$claude_code"; echo "codex=$codex"; } >> "$GITHUB_OUTPUT"
           echo "merge-policy engine $sha ($ENGINE_REF)"
       - name: Install Claude Code
         # The cross reviewer calls the OpenAI Responses API from review.mjs with no tools.
@@ -288,6 +300,7 @@ jobs:
           CLAUDE_CODE_VERSION: ${{ steps.engine.outputs.claude_code }}
         run: npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
       - name: Review
+        id: review
         run: node "$RUNNER_TEMP/merge-policy/src/review.mjs"
         env:
           GH_TOKEN: ${{ github.token }}
@@ -305,22 +318,46 @@ jobs:
           # and findings, or null for a review of the whole PR.
           DELTA: ${{ toJSON(matrix.reviewer.delta) }}
           REVIEW_OUT: review-out
+          CODEX_FALLBACK: ${{ matrix.reviewer.name != 'cross' && secrets.CODEX_AUTH_JSON != '' && 'available' || '' }}
           # Each reviewer gets only its own provider's credential.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ matrix.reviewer.name != 'cross' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           CLAUDE_CODE_OAUTH_TOKEN_2: ${{ matrix.reviewer.name != 'cross' && secrets.CLAUDE_CODE_OAUTH_TOKEN_2 || '' }}
           CLAUDE_CODE_OAUTH_TOKEN_3: ${{ matrix.reviewer.name != 'cross' && secrets.CLAUDE_CODE_OAUTH_TOKEN_3 || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN_4: ${{ matrix.reviewer.name != 'cross' && secrets.CLAUDE_CODE_OAUTH_TOKEN_4 || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN_5: ${{ matrix.reviewer.name != 'cross' && secrets.CLAUDE_CODE_OAUTH_TOKEN_5 || '' }}
           ANTHROPIC_API_KEY: ${{ matrix.reviewer.name != 'cross' && secrets.ANTHROPIC_API_KEY || '' }}
           OPENAI_API_KEY: ${{ matrix.reviewer.name == 'cross' && secrets.OPENAI_API_KEY || '' }}
+      - name: Install Codex CLI
+        if: steps.review.outputs.codex_fallback == 'true'
+        env:
+          CODEX_VERSION: ${{ steps.engine.outputs.codex }}
+        run: npm install -g "@openai/codex@$CODEX_VERSION"
+      - name: Codex fallback review
+        if: steps.review.outputs.codex_fallback == 'true'
+        run: node "$RUNNER_TEMP/merge-policy/src/review.mjs" codex
+        env:
+          REVIEWER: ${{ matrix.reviewer.name }}
+          MODEL: ${{ matrix.reviewer.model }}
+          EFFORT: ${{ matrix.reviewer.effort }}
+          PR_NUMBER: ${{ needs.classify.outputs.pr }}
+          HEAD_SHA: ${{ needs.classify.outputs.head_sha }}
+          BASE_SHA: ${{ needs.classify.outputs.base_sha }}
+          TIER: ${{ needs.classify.outputs.tier }}
+          REASONS: ${{ needs.classify.outputs.reasons }}
+          REVIEW_GUIDES: ${{ needs.classify.outputs.review_guides }}
+          DELTA: ${{ toJSON(matrix.reviewer.delta) }}
+          REVIEW_OUT: review-out
+          CODEX_AUTH_JSON: ${{ matrix.reviewer.name != 'cross' && secrets.CODEX_AUTH_JSON || '' }}
       # The App token exists only after the reviewer is gone: no Claude
       # process may outlive the Review step into the steps that hold it.
       - name: No reviewer process left
         id: clear
         if: always()
         run: |
-          pat='anthropic-ai/claude-code|(^|/)claude( |$)'
+          pat='anthropic-ai/claude-code|(^|/)claude( |$)|@openai/codex|(^|/)codex( |$)'
           pkill -9 -f "$pat" || true
           sleep 1
-          if pgrep -fa "$pat"; then echo "::error::a Claude process outlived the review step"; exit 1; fi
+          if pgrep -fa "$pat"; then echo "::error::a reviewer process outlived the review step"; exit 1; fi
       - name: Mint the merge-bot token
         id: bot
         if: always() && steps.clear.outcome == 'success' && vars.MERGE_BOT_CLIENT_ID != ''
@@ -359,7 +396,7 @@ jobs:
     # Runs whenever classify was due, whatever became of it: it must post a
     # failing merge-gate check when anything before it failed. Only an idle
     # event, on which classify was never due, skips it.
-    if: always() && !(github.event_name == 'pull_request_target' && ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && !(startsWith(github.event.label.name, 'merge:') && github.event.label.name != 'merge:armed' && github.event.label.name != 'merge:owner' && github.event.label.name != 'merge:changes') || github.event.action == 'unlabeled' && github.event.label.name == 'merge:retry' || github.event.action == 'edited' && !github.event.changes.base && !github.event.changes.title && !(github.event.changes.body && startsWith(github.event.pull_request.title, 'Revert "'))))
+    if: always() && !(github.event_name == 'workflow_run' && github.event.workflow_run.event != 'pull_request' || github.event_name == 'pull_request_target' && ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != '' && !(startsWith(github.event.label.name, 'merge:') && github.event.label.name != 'merge:armed' && github.event.label.name != 'merge:owner' && github.event.label.name != 'merge:changes') || github.event.action == 'unlabeled' && github.event.label.name == 'merge:retry' || github.event.action == 'edited' && !github.event.changes.base && !github.event.changes.title && !(github.event.changes.body && startsWith(github.event.pull_request.title, 'Revert "'))))
     runs-on: ${{ vars.MERGE_POLICY_RUNNER || 'ubuntu-latest' }}
     # Room for a stalled engine fetch to time out as a step (a failure) and
     # for the fail-closed steps after it: checkout + 1 + 2 + 1 + 1 minutes.
@@ -372,6 +409,7 @@ jobs:
       pull-requests: write
       issues: write
       checks: read # the App's merge-review/* verdicts; required CI in direct mode
+      actions: read # the red-main hold: main's push CI runs and their jobs (src/watch.mjs mainState)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: needs.classify.outputs.skip == 'false' || (needs.classify.result != 'success' && github.event_name != 'workflow_run')
@@ -429,7 +467,9 @@ jobs:
           test -f "$dir/src/run-gate.mjs"
           claude_code=$(field claude_code_version < "$dir/engine.json")
           [[ "$claude_code" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::engine.json claude_code_version is not x.y.z"; exit 1; }
-          { echo "sha=$sha"; echo "dir=$dir"; echo "claude_code=$claude_code"; } >> "$GITHUB_OUTPUT"
+          codex=$(field codex_version < "$dir/engine.json")
+          [[ "$codex" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::engine.json codex_version is not x.y.z"; exit 1; }
+          { echo "sha=$sha"; echo "dir=$dir"; echo "claude_code=$claude_code"; echo "codex=$codex"; } >> "$GITHUB_OUTPUT"
           echo "merge-policy engine $sha ($ENGINE_REF)"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: needs.classify.outputs.skip == 'false' && needs.classify.outputs.reviewers_needed != '[]' && inputs.dry_run != true
